@@ -24,6 +24,7 @@ includeBuild("build-logic")
 
 include(
     "platform:acme-bom",
+    "starters:acme-money",
     "starters:acme-test-support",
     "starters:acme-web-spring-boot-autoconfigure",
     "starters:acme-web-spring-boot-starter",
