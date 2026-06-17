@@ -23,7 +23,10 @@ includeBuild("build-logic")
 
 include(
     "platform:acme-bom",
+    "starters:acme-test-support",
     "starters:acme-web-spring-boot-autoconfigure",
     "starters:acme-web-spring-boot-starter",
+    "starters:acme-persistence-spring-boot-autoconfigure",
+    "starters:acme-persistence-spring-boot-starter",
     "examples:demo-service",
 )
