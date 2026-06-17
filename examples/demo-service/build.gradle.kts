@@ -3,6 +3,11 @@ plugins {
     alias(libs.plugins.spring.boot)
 }
 
+tasks.named<org.springframework.boot.gradle.tasks.bundling.BootBuildImage>("bootBuildImage") {
+    imageName.set("acme/demo-service:${project.version}")
+    environment.set(mapOf("BP_JVM_VERSION" to "21", "BP_JVM_CDS_ENABLED" to "true"))
+}
+
 dependencies {
     implementation(platform(project(":platform:acme-bom")))
     implementation(project(":starters:acme-web-spring-boot-starter"))

@@ -1,0 +1,121 @@
+name: acme-local
+
+# Local backing stack for development and integration testing.
+# Does NOT contain the application itself — only infrastructure.
+#
+# Start: docker compose up -d
+# Stop:  docker compose down
+#
+# Port map (host):
+#   5432  — Postgres
+#   8080  — Redpanda Console (UI)
+#   8081  — Redpanda Schema Registry
+#   9092  — Redpanda Kafka
+#   8082  — Keycloak (admin UI at /admin, JWKS at /realms/<realm>/protocol/openid-connect/certs)
+#   3000  — Grafana
+#   4317  — OTLP gRPC
+#   4318  — OTLP HTTP
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # Postgres — primary RDBMS for local dev (Oracle is the production reference)
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: demo
+      POSTGRES_USER: demo
+      POSTGRES_PASSWORD: demo
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U demo -d demo"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Redpanda — Kafka-compatible broker (single-node, no ZooKeeper)
+  # ---------------------------------------------------------------------------
+  redpanda:
+    image: redpandadata/redpanda:v24.2.7
+    command:
+      - redpanda
+      - start
+      - --overprovisioned
+      - --smp=1
+      - --memory=1G
+      - --reserve-memory=0M
+      - --node-id=0
+      - --kafka-addr=internal://0.0.0.0:9093,external://0.0.0.0:9092
+      - --advertise-kafka-addr=internal://redpanda:9093,external://localhost:9092
+      - --pandaproxy-addr=internal://0.0.0.0:8082,external://0.0.0.0:18082
+      - --advertise-pandaproxy-addr=internal://redpanda:8082,external://localhost:18082
+      - --schema-registry-addr=internal://0.0.0.0:8081,external://0.0.0.0:18081
+      - --advertise-schema-registry-addr=internal://redpanda:8081,external://localhost:18081
+      - --rpc-addr=redpanda:33145
+      - --advertise-rpc-addr=redpanda:33145
+    ports:
+      - "9092:9092"    # Kafka (external)
+      - "8081:18081"   # Schema Registry (external → host 8081)
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -E 'Healthy:.+true'"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Redpanda Console — topic browser UI (http://localhost:8080)
+  # ---------------------------------------------------------------------------
+  redpanda-console:
+    image: redpandadata/console:v3.7.4
+    environment:
+      KAFKA_BROKERS: redpanda:9093
+      SCHEMAREGISTRY_ENABLED: "true"
+      SCHEMAREGISTRY_URLS: http://redpanda:8081
+    ports:
+      - "8080:8080"
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Keycloak — OAuth2 / OIDC identity provider (start-dev mode, no TLS)
+  # Host port 8082 (avoids collision with Redpanda Schema Registry on 8081).
+  # Admin UI:  http://localhost:8082/admin  (admin / admin)
+  # JWKS URL:  http://localhost:8082/realms/<realm>/protocol/openid-connect/certs
+  # ---------------------------------------------------------------------------
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.2
+    command: start-dev
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_HTTP_PORT: 8080
+    ports:
+      - "8082:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health/ready || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 15
+      start_period: 30s
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # otel-lgtm — all-in-one observability backend:
+  #   Grafana (3000), Loki, Tempo, Prometheus + OTel Collector
+  #   OTLP gRPC: 4317   OTLP HTTP: 4318
+  # Point services at: OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+  # ---------------------------------------------------------------------------
+  otel-lgtm:
+    image: grafana/otel-lgtm:latest
+    ports:
+      - "3000:3000"    # Grafana UI
+      - "4317:4317"    # OTLP gRPC
+      - "4318:4318"    # OTLP HTTP
+    restart: unless-stopped
