@@ -108,8 +108,10 @@ modules.
 ## 6. Ledger model (accounts core — Formance/Kleppmann)
 
 - **`Account`** (`@AggregateRoot`): `AccountId` (VO), `Iban` (VO), `status`, `@Version` (optimistic
-  lock). Balance is **derived** = Σ of the account's ledger entries (or a maintained materialized
-  balance column updated in the posting tx, reconciled by a scheduled job — ShedLock).
+  lock). Balance is **purely derived** = `SUM(entries.amount)` for the account, computed by query —
+  no materialized balance column, no materialized view, no reconciliation job. (Materialization is a
+  deliberate non-goal in v1: it adds a sync/drift risk for premature optimization; the ledger stays
+  the single source of truth.)
 - **`Posting`** (a balanced transaction): `PostingId`, `transferId` (idempotency key, unique),
   `entries` (≥ 2), immutable/append-only. Domain invariant **`Σ entries.amount == Money.zero(asset)`**.
 - **`LedgerEntry`**: `postingId`, `accountId`, signed `Money` (debit negative, credit positive),
@@ -195,9 +197,12 @@ balances), resilience (cross-service calls, rail stub), featureflags (antifraud 
 
 ## 11. Sub-project decomposition (each = spec → plan → build)
 
-- **BANK-0** — skeleton: `examples/acme-bank` multi-module Gradle wiring, `acme-money` library
-  (full, with tests), `bank-contracts` (Avro schemas + codegen), ArchUnit/jMolecules conventions,
-  `compose.bank.yaml`.
+- **BANK-0 (money first)** — the `acme-money` library ALONE, built and tested exhaustively (mirrors
+  the Go `platform/money` suite: arithmetic, allocate/split conservation, rounding modes, compare,
+  fuzz/property, validation/DoS bounds, JPA `NUMERIC+asset` round-trip on Testcontainers, Avro string
+  serde). No bank services yet — money is the foundation everything else builds on.
+- **BANK-0.5** — example skeleton: `examples/acme-bank` multi-module Gradle wiring, `bank-contracts`
+  (Avro schemas + codegen), ArchUnit/jMolecules conventions, `compose.bank.yaml`.
 - **BANK-1** — **accounts + ledger**: deep hexagonal core, domain-first (Account/Posting/Entry/Money),
   `PostTransfer` ACID Σ=0, idempotent posting, JPA persistence, audit attribution, ArchUnit, ITs.
 - **BANK-2** — **transfers**: `Transfer` saga aggregate + CQRS + outbox; drives the `acme-outbox`
