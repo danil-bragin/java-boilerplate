@@ -6,6 +6,8 @@ pipelinr = "0.11"
 spring-modulith = "1.4.6"
 resilience4j = "2.4.0"
 openfeature = "1.20.2"
+confluent = "7.9.1"
+avro = "1.11.4"
 
 [libraries]
 spring-boot-dependencies = { module = "org.springframework.boot:spring-boot-dependencies", version.ref = "spring-boot" }
@@ -48,6 +50,9 @@ spring-boot-starter-aop = { module = "org.springframework.boot:spring-boot-start
 caffeine = { module = "com.github.ben-manes.caffeine:caffeine" }
 resilience4j-spring-boot3 = { module = "io.github.resilience4j:resilience4j-spring-boot3", version.ref = "resilience4j" }
 openfeature-sdk = { module = "dev.openfeature:sdk", version.ref = "openfeature" }
+kafka-avro-serializer = { module = "io.confluent:kafka-avro-serializer", version.ref = "confluent" }
+avro = { module = "org.apache.avro:avro", version.ref = "avro" }
 
 [plugins]
 spring-boot = { id = "org.springframework.boot", version.ref = "spring-boot" }
+avro = { id = "com.github.davidmc24.gradle.plugin.avro", version = "1.9.1" }
