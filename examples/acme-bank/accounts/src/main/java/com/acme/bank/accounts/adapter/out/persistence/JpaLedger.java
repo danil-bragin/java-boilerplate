@@ -13,13 +13,18 @@ import org.springframework.stereotype.Component;
 class JpaLedger implements Ledger {
 
     private final LedgerEntryJpaRepository entries;
+    private final PostingJpaRepository postings;
 
-    JpaLedger(LedgerEntryJpaRepository entries) {
+    JpaLedger(LedgerEntryJpaRepository entries, PostingJpaRepository postings) {
         this.entries = entries;
+        this.postings = postings;
     }
 
     @Override
     public void save(Posting posting) {
+        // Insert the idempotency anchor first and flush so a concurrent duplicate fails the PK here
+        // (throwing DataIntegrityViolationException) and rolls back before any entries are written.
+        postings.saveAndFlush(new PostingJpaEntity(posting.transferId()));
         for (LedgerEntry entry : posting.entries()) {
             entries.save(new LedgerEntryJpaEntity(
                     posting.transferId(), entry.accountId().value(), MoneyAmount.from(entry.amount())));

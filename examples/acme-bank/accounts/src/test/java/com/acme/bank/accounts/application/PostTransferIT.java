@@ -86,4 +86,39 @@ class PostTransferIT {
         Long entries = jdbc.queryForObject("SELECT count(*) FROM ledger_entry WHERE transfer_id = 't-3'", Long.class);
         assertThat(entries).isEqualTo(2L);
     }
+
+    @Test
+    void concurrentSameTransferDoesNotDoublePost() throws Exception {
+        openAccount("sc");
+        openAccount("dc");
+        seedBalance("sc", "500.00");
+
+        var command = new PostTransferCommand("t-conc", "sc", "dc", Money.of("50.00", Assets.USD));
+        int threads = 8;
+        var pool = java.util.concurrent.Executors.newFixedThreadPool(threads);
+        var start = new java.util.concurrent.CountDownLatch(1);
+        var done = new java.util.concurrent.CountDownLatch(threads);
+        for (int i = 0; i < threads; i++) {
+            pool.submit(() -> {
+                try {
+                    start.await();
+                    pipeline.send(command); // losers throw a constraint violation; winner commits
+                } catch (Exception ignored) {
+                    // expected for the racing losers
+                } finally {
+                    done.countDown();
+                }
+            });
+        }
+        start.countDown();
+        done.await();
+        pool.shutdown();
+
+        // The PK anchor guarantees the transfer is posted exactly once: 2 entries, never 4+.
+        Long entries =
+                jdbc.queryForObject("SELECT count(*) FROM ledger_entry WHERE transfer_id = 't-conc'", Long.class);
+        assertThat(entries).isEqualTo(2L);
+        Long postings = jdbc.queryForObject("SELECT count(*) FROM posting WHERE transfer_id = 't-conc'", Long.class);
+        assertThat(postings).isEqualTo(1L);
+    }
 }
