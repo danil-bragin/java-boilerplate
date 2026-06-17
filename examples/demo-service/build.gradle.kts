@@ -14,6 +14,7 @@ dependencies {
     implementation(project(":starters:acme-cache-spring-boot-starter"))
     implementation(project(":starters:acme-resilience-spring-boot-starter"))
     implementation(project(":starters:acme-featureflags-spring-boot-starter"))
+    implementation(project(":starters:acme-messaging-spring-boot-starter"))
     testImplementation(project(":starters:acme-test-support"))
     testImplementation(libs.spring.boot.starter.test)
     testImplementation(libs.spring.security.test)

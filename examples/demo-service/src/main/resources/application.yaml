@@ -12,6 +12,11 @@ spring:
     open-in-view: false
   flyway:
     locations: classpath:db/migration/{vendor}
+  kafka:
+    consumer:
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
   modulith:
     events:
       # On the JPA events path the event_publication table is owned by Flyway (V3 migration).
