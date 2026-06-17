@@ -8,6 +8,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration;
 import org.springframework.cache.CacheManager;
 import org.springframework.cache.annotation.EnableCaching;
 import org.springframework.cache.caffeine.CaffeineCacheManager;
@@ -20,9 +21,11 @@ import org.springframework.data.redis.connection.RedisConnectionFactory;
  * Overridable — a consumer can define their own {@link CacheManager}.
  *
  * <p>When {@code acme.cache.two-tier.enabled=true} and Redis is on the classpath, a
- * {@link TwoTierCacheManager} (Caffeine L1 + Redis L2) is registered instead.
+ * {@link TwoTierCacheManager} (Caffeine L1 + Redis L2) is registered instead. This
+ * auto-configuration runs after {@link RedisAutoConfiguration} to ensure the
+ * {@link RedisConnectionFactory} bean is available for the two-tier condition check.
  */
-@AutoConfiguration
+@AutoConfiguration(after = RedisAutoConfiguration.class)
 @ConditionalOnClass({CaffeineCacheManager.class, Caffeine.class})
 @EnableCaching
 public class CacheAutoConfiguration {

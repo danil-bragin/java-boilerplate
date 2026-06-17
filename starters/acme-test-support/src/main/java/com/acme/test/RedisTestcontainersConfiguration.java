@@ -10,6 +10,10 @@ import org.testcontainers.utility.DockerImageName;
  * Importable test configuration exposing a Redis container wired to Spring Boot via
  * {@link ServiceConnection}. Integration tests {@code @Import} this to get a real Redis
  * with zero datasource configuration. Uses the locally-cached {@code redis:7-alpine} image.
+ *
+ * <p>{@code @ServiceConnection(name = "redis")} on {@link GenericContainer} is supported by
+ * Spring Boot's {@code RedisContainerConnectionDetailsFactory} which accepts any
+ * {@code Container<?>} whose connection name matches the known Redis image names.
  */
 @TestConfiguration(proxyBeanMethods = false)
 public class RedisTestcontainersConfiguration {
