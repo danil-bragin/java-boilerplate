@@ -1,6 +1,11 @@
 spring:
   application:
     name: demo-service
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          jwk-set-uri: ${KEYCLOAK_JWKS:http://localhost:8081/realms/demo/protocol/openid-connect/certs}
   jpa:
     hibernate:
       ddl-auto: validate
