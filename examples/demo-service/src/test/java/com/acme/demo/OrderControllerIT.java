@@ -34,6 +34,7 @@ class OrderControllerIT {
     void returnsValidationProblemForBadBody() throws Exception {
         mvc.perform(post("/v1/orders").contentType(MediaType.APPLICATION_JSON).content("{\"sku\":\"\",\"quantity\":0}"))
                 .andExpect(status().isBadRequest())
+                .andExpect(content().contentTypeCompatibleWith("application/problem+json"))
                 .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"))
                 .andExpect(jsonPath("$.errors").isArray());
     }
