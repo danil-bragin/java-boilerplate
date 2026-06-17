@@ -4,6 +4,13 @@ plugins {
     alias(libs.plugins.avro)
 }
 
+spotless {
+    java {
+        // Exclude Avro-generated sources from style checks.
+        targetExclude("build/generated-main-avro-java/**/*.java", "build/generated-test-avro-java/**/*.java")
+    }
+}
+
 tasks.named<org.springframework.boot.gradle.tasks.bundling.BootBuildImage>("bootBuildImage") {
     imageName.set("acme/demo-service:${project.version}")
     environment.set(mapOf("BP_JVM_VERSION" to "21", "BP_JVM_CDS_ENABLED" to "true"))
