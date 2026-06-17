@@ -1,0 +1,13 @@
+{
+  "namespace": "com.acme.bank.contracts.avro",
+  "type": "record",
+  "name": "TransferRequested",
+  "fields": [
+    { "name": "transferId", "type": "string" },
+    { "name": "sourceAccountId", "type": "string" },
+    { "name": "destinationAccountId", "type": "string" },
+    { "name": "amount", "type": "com.acme.bank.contracts.avro.Money" },
+    { "name": "requestedBy", "type": "string" },
+    { "name": "requestedAt", "type": { "type": "long", "logicalType": "timestamp-millis" } }
+  ]
+}

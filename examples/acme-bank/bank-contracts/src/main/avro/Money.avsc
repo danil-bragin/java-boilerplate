@@ -1,0 +1,9 @@
+{
+  "namespace": "com.acme.bank.contracts.avro",
+  "type": "record",
+  "name": "Money",
+  "fields": [
+    { "name": "amount", "type": "string" },
+    { "name": "asset", "type": "string" }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "namespace": "com.acme.bank.contracts.avro",
+  "type": "record",
+  "name": "TransferCompleted",
+  "fields": [
+    { "name": "transferId", "type": "string" },
+    { "name": "postingId", "type": "string" },
+    { "name": "completedAt", "type": { "type": "long", "logicalType": "timestamp-millis" } }
+  ]
+}
