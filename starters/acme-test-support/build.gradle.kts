@@ -8,4 +8,6 @@ dependencies {
     api(libs.testcontainers.postgresql)
     api(libs.testcontainers.junit.jupiter)
     api(libs.spring.boot.starter.test)
+    api(libs.testcontainers.redpanda)
+    api(libs.spring.kafka)
 }
