@@ -6,15 +6,18 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.acme.test.PostgresTestcontainersConfiguration;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
 @SpringBootTest
 @AutoConfigureMockMvc
+@Import(PostgresTestcontainersConfiguration.class)
 class OrderControllerIT {
 
     @Autowired
@@ -22,12 +25,12 @@ class OrderControllerIT {
 
     @Test
     void returnsProblemJsonForMissingOrder() throws Exception {
-        mvc.perform(get("/v1/orders/42"))
+        mvc.perform(get("/v1/orders/999999"))
                 .andExpect(status().isNotFound())
                 .andExpect(content().contentTypeCompatibleWith("application/problem+json"))
                 .andExpect(jsonPath("$.code").value("ORDER_NOT_FOUND"))
                 .andExpect(jsonPath("$.title").value("Order not found"))
-                .andExpect(jsonPath("$.params.orderId").value("42"));
+                .andExpect(jsonPath("$.params.orderId").value(999999));
     }
 
     @Test

@@ -16,14 +16,23 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/v1/orders")
 public class OrderController {
 
+    private final OrderRepository orders;
+
+    public OrderController(OrderRepository orders) {
+        this.orders = orders;
+    }
+
     @PostMapping
-    @ResponseStatus(HttpStatus.ACCEPTED)
+    @ResponseStatus(HttpStatus.CREATED)
     public Map<String, Object> create(@Valid @RequestBody CreateOrderRequest req) {
-        return Map.of("status", "accepted", "sku", req.sku(), "quantity", req.quantity());
+        Order saved = orders.save(new Order(req.sku(), req.quantity()));
+        return Map.of("id", saved.getId(), "sku", saved.getSku(), "quantity", saved.getQuantity());
     }
 
     @GetMapping("/{id}")
-    public Map<String, Object> get(@PathVariable String id) {
-        throw new ApiException(DemoErrorCode.ORDER_NOT_FOUND, Map.of("orderId", id));
+    public Map<String, Object> get(@PathVariable Long id) {
+        Order order = orders.findById(id)
+                .orElseThrow(() -> new ApiException(DemoErrorCode.ORDER_NOT_FOUND, Map.of("orderId", id)));
+        return Map.of("id", order.getId(), "sku", order.getSku(), "quantity", order.getQuantity());
     }
 }
