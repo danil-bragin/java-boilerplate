@@ -32,5 +32,6 @@ include(
     "starters:acme-observability-spring-boot-starter",
     "starters:acme-cqrs-spring-boot-autoconfigure",
     "starters:acme-cqrs-spring-boot-starter",
+    "starters:acme-outbox-spring-boot-starter",
     "examples:demo-service",
 )
