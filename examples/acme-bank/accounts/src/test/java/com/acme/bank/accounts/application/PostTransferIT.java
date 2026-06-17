@@ -1,0 +1,88 @@
+package com.acme.bank.accounts.application;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import an.awesome.pipelinr.Pipeline;
+import com.acme.money.Assets;
+import com.acme.money.Money;
+import com.acme.test.PostgresTestcontainersConfiguration;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.Import;
+import org.springframework.jdbc.core.JdbcTemplate;
+
+@SpringBootTest
+@Import(PostgresTestcontainersConfiguration.class)
+class PostTransferIT {
+
+    @Autowired
+    Pipeline pipeline;
+
+    @Autowired
+    JdbcTemplate jdbc;
+
+    private void openAccount(String id) {
+        jdbc.update("INSERT INTO account(id, iban, status) VALUES (?, ?, 'OPEN')", id, "IBAN-" + id);
+    }
+
+    private void seedBalance(String accountId, String amount) {
+        java.math.BigDecimal bd = new java.math.BigDecimal(amount);
+        jdbc.update(
+                "INSERT INTO ledger_entry(id, transfer_id, account_id, amount, asset) "
+                        + "VALUES (nextval('ledger_entry_seq'), ?, ?, ?, 'USD')",
+                "seed-" + accountId, accountId, bd);
+        jdbc.update(
+                "INSERT INTO ledger_entry(id, transfer_id, account_id, amount, asset) "
+                        + "VALUES (nextval('ledger_entry_seq'), ?, 'funding', ?, 'USD')",
+                "seed-" + accountId, bd.negate());
+    }
+
+    @Test
+    void postsABalancedTransferAndDerivesBalances() {
+        openAccount("src");
+        openAccount("dst");
+        seedBalance("src", "500.00");
+
+        PostTransferResult result = pipeline.send(
+                new PostTransferCommand("t-1", "src", "dst", Money.of("120.00", Assets.USD)));
+
+        assertThat(result.posted()).isTrue();
+        Long entries = jdbc.queryForObject(
+                "SELECT count(*) FROM ledger_entry WHERE transfer_id = 't-1'", Long.class);
+        assertThat(entries).isEqualTo(2L);
+        java.math.BigDecimal sum = jdbc.queryForObject(
+                "SELECT sum(amount) FROM ledger_entry WHERE transfer_id = 't-1'", java.math.BigDecimal.class);
+        assertThat(sum).isEqualByComparingTo("0");
+    }
+
+    @Test
+    void rejectsInsufficientFundsWithoutMovingMoney() {
+        openAccount("poor");
+        openAccount("rich");
+        seedBalance("poor", "10.00");
+
+        long before = jdbc.queryForObject("SELECT count(*) FROM ledger_entry", Long.class);
+        PostTransferResult result = pipeline.send(
+                new PostTransferCommand("t-2", "poor", "rich", Money.of("100.00", Assets.USD)));
+
+        assertThat(result.posted()).isFalse();
+        assertThat(result.reason()).isEqualTo("INSUFFICIENT_FUNDS");
+        long after = jdbc.queryForObject("SELECT count(*) FROM ledger_entry", Long.class);
+        assertThat(after).isEqualTo(before);
+    }
+
+    @Test
+    void postingIsIdempotentByTransferId() {
+        openAccount("s2");
+        openAccount("d2");
+        seedBalance("s2", "500.00");
+
+        pipeline.send(new PostTransferCommand("t-3", "s2", "d2", Money.of("50.00", Assets.USD)));
+        pipeline.send(new PostTransferCommand("t-3", "s2", "d2", Money.of("50.00", Assets.USD)));
+
+        Long entries = jdbc.queryForObject(
+                "SELECT count(*) FROM ledger_entry WHERE transfer_id = 't-3'", Long.class);
+        assertThat(entries).isEqualTo(2L);
+    }
+}
