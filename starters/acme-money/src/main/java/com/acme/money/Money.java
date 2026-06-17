@@ -3,6 +3,9 @@ package com.acme.money;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.math.RoundingMode;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -97,6 +100,68 @@ public final class Money implements Comparable<Money> {
     /** Divide with banker's rounding ({@link RoundingMode#HALF_EVEN}) — the money default. */
     public Money divide(BigDecimal divisor, int scale) {
         return divide(divisor, scale, RoundingMode.HALF_EVEN);
+    }
+
+    /**
+     * Allocate this amount across the given integer ratios, conserving every minor unit (Fowler
+     * allocation, sign-aware). The amount is first taken at the asset's minor-unit scale (banker's
+     * rounding if it carries sub-minor precision); the remainder is distributed one unit at a time.
+     */
+    public List<Money> allocate(int... ratios) {
+        if (ratios.length == 0) {
+            throw new IllegalArgumentException("at least one ratio is required");
+        }
+        long ratioSum = 0;
+        for (int ratio : ratios) {
+            if (ratio < 0) {
+                throw new IllegalArgumentException("ratios must be >= 0");
+            }
+            ratioSum += ratio;
+        }
+        if (ratioSum == 0) {
+            throw new IllegalArgumentException("ratio sum must be > 0");
+        }
+
+        int scale = asset.scale();
+        BigInteger totalMinor = amount.setScale(scale, RoundingMode.HALF_EVEN)
+                .movePointRight(scale)
+                .toBigIntegerExact();
+        BigInteger sum = BigInteger.valueOf(ratioSum);
+
+        BigInteger[] shares = new BigInteger[ratios.length];
+        BigInteger remainder = totalMinor;
+        for (int i = 0; i < ratios.length; i++) {
+            // truncate toward zero
+            BigInteger share =
+                    totalMinor.multiply(BigInteger.valueOf(ratios[i])).divide(sum);
+            shares[i] = share;
+            remainder = remainder.subtract(share);
+        }
+        // distribute the remainder one minor unit at a time (sign-aware)
+        int step = remainder.signum() >= 0 ? 1 : -1;
+        BigInteger stepValue = BigInteger.valueOf(step);
+        int i = 0;
+        while (remainder.signum() != 0) {
+            shares[i] = shares[i].add(stepValue);
+            remainder = remainder.subtract(stepValue);
+            i = (i + 1) % ratios.length;
+        }
+
+        List<Money> result = new ArrayList<>(ratios.length);
+        for (BigInteger share : shares) {
+            result.add(new Money(new BigDecimal(share).movePointLeft(scale), asset));
+        }
+        return result;
+    }
+
+    /** Split into {@code n} as-equal-as-possible parts (conserves every unit). */
+    public List<Money> split(int n) {
+        if (n <= 0) {
+            throw new IllegalArgumentException("n must be > 0");
+        }
+        int[] ratios = new int[n];
+        Arrays.fill(ratios, 1);
+        return allocate(ratios);
     }
 
     @Override
