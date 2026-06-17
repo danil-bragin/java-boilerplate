@@ -104,8 +104,11 @@ public final class Money implements Comparable<Money> {
 
     /**
      * Allocate this amount across the given integer ratios, conserving every minor unit (Fowler
-     * allocation, sign-aware). The amount is first taken at the asset's minor-unit scale (banker's
-     * rounding if it carries sub-minor precision); the remainder is distributed one unit at a time.
+     * allocation, sign-aware). Allocation IS the rounding boundary: the amount is first taken at the
+     * asset's minor-unit scale (banker's rounding if it carries sub-minor precision, e.g. a value
+     * produced by {@link #multiply}), so the allocated parts sum to that rounded total — round once,
+     * here. The leftover minor unit(s) are distributed one at a time across positive-ratio buckets
+     * only; a ratio of {@code 0} always receives nothing.
      */
     public List<Money> allocate(int... ratios) {
         if (ratios.length == 0) {
@@ -137,13 +140,15 @@ public final class Money implements Comparable<Money> {
             shares[i] = share;
             remainder = remainder.subtract(share);
         }
-        // distribute the remainder one minor unit at a time (sign-aware)
+        // distribute the remainder one minor unit at a time (sign-aware), positive-ratio buckets only
         int step = remainder.signum() >= 0 ? 1 : -1;
         BigInteger stepValue = BigInteger.valueOf(step);
         int i = 0;
         while (remainder.signum() != 0) {
-            shares[i] = shares[i].add(stepValue);
-            remainder = remainder.subtract(stepValue);
+            if (ratios[i] > 0) {
+                shares[i] = shares[i].add(stepValue);
+                remainder = remainder.subtract(stepValue);
+            }
             i = (i + 1) % ratios.length;
         }
 
