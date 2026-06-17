@@ -27,6 +27,8 @@ public class FeatureFlagsAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     public Client featureFlagsClient(FeatureProvider provider) {
+        // OpenFeatureAPI is a JVM-wide singleton: setting the provider here mutates global state.
+        // Fine for a single application, but be aware when multiple Spring contexts coexist (e.g. tests).
         OpenFeatureAPI api = OpenFeatureAPI.getInstance();
         try {
             api.setProviderAndWait(provider);
