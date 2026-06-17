@@ -38,6 +38,9 @@ spring-modulith-events-kafka = { module = "org.springframework.modulith:spring-m
 spring-kafka = { module = "org.springframework.kafka:spring-kafka" }
 spring-kafka-test = { module = "org.springframework.kafka:spring-kafka-test" }
 testcontainers-redpanda = { module = "org.testcontainers:redpanda" }
+spring-boot-starter-security = { module = "org.springframework.boot:spring-boot-starter-security" }
+spring-boot-starter-oauth2-resource-server = { module = "org.springframework.boot:spring-boot-starter-oauth2-resource-server" }
+spring-security-test = { module = "org.springframework.security:spring-security-test" }
 
 [plugins]
 spring-boot = { id = "org.springframework.boot", version.ref = "spring-boot" }
