@@ -43,5 +43,6 @@ include(
     "starters:acme-featureflags-spring-boot-starter",
     "starters:acme-messaging-spring-boot-autoconfigure",
     "starters:acme-messaging-spring-boot-starter",
+    "starters:acme-avro-spring-boot-starter",
     "examples:demo-service",
 )
