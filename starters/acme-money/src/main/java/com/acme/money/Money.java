@@ -2,6 +2,7 @@ package com.acme.money;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.math.RoundingMode;
 import java.util.Objects;
 
 /**
@@ -86,6 +87,16 @@ public final class Money implements Comparable<Money> {
 
     public Money abs() {
         return new Money(amount.abs(), asset);
+    }
+
+    /** Divide with an explicit result scale and rounding mode (guard against silent precision loss). */
+    public Money divide(BigDecimal divisor, int scale, RoundingMode mode) {
+        return new Money(amount.divide(divisor, scale, mode), asset);
+    }
+
+    /** Divide with banker's rounding ({@link RoundingMode#HALF_EVEN}) — the money default. */
+    public Money divide(BigDecimal divisor, int scale) {
+        return divide(divisor, scale, RoundingMode.HALF_EVEN);
     }
 
     @Override
