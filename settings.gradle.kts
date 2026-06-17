@@ -30,5 +30,7 @@ include(
     "starters:acme-persistence-spring-boot-starter",
     "starters:acme-observability-spring-boot-autoconfigure",
     "starters:acme-observability-spring-boot-starter",
+    "starters:acme-cqrs-spring-boot-autoconfigure",
+    "starters:acme-cqrs-spring-boot-starter",
     "examples:demo-service",
 )
