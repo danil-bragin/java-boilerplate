@@ -10,4 +10,5 @@ dependencies {
     api(libs.spring.boot.starter.test)
     api(libs.testcontainers.redpanda)
     api(libs.spring.kafka)
+    api(libs.spring.boot.starter.data.redis)
 }
