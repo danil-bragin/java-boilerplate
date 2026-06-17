@@ -9,3 +9,18 @@ spring:
     locations: classpath:db/migration/{vendor}
 server:
   port: 8080
+  shutdown: graceful
+management:
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: readinessState,db
+        liveness:
+          include: livenessState
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
