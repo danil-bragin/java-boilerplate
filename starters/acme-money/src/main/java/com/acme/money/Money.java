@@ -164,6 +164,14 @@ public final class Money implements Comparable<Money> {
         return allocate(ratios);
     }
 
+    public Money min(Money other) {
+        return compareTo(other) <= 0 ? this : other;
+    }
+
+    public Money max(Money other) {
+        return compareTo(other) >= 0 ? this : other;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) {
