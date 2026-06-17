@@ -1,0 +1,8 @@
+{
+  "namespace": "com.acme.bank.contracts.avro",
+  "type": "record",
+  "name": "LedgerPosted",
+  "fields": [
+    { "name": "transferId", "type": "string" }
+  ]
+}

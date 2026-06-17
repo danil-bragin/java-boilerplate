@@ -1,0 +1,9 @@
+{
+  "namespace": "com.acme.bank.contracts.avro",
+  "type": "record",
+  "name": "PostingRejected",
+  "fields": [
+    { "name": "transferId", "type": "string" },
+    { "name": "reason", "type": "string" }
+  ]
+}

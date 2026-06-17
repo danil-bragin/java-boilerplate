@@ -1,0 +1,10 @@
+{
+  "namespace": "com.acme.bank.contracts.avro",
+  "type": "record",
+  "name": "TransferScreened",
+  "fields": [
+    { "name": "transferId", "type": "string" },
+    { "name": "approved", "type": "boolean" },
+    { "name": "reason", "type": ["null", "string"], "default": null }
+  ]
+}
