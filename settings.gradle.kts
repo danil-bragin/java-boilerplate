@@ -37,5 +37,6 @@ include(
     "starters:acme-security-spring-boot-starter",
     "starters:acme-cache-spring-boot-autoconfigure",
     "starters:acme-cache-spring-boot-starter",
+    "starters:acme-resilience-spring-boot-starter",
     "examples:demo-service",
 )
