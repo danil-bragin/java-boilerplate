@@ -31,11 +31,14 @@ class PostTransferIT {
         jdbc.update(
                 "INSERT INTO ledger_entry(id, transfer_id, account_id, amount, asset) "
                         + "VALUES (nextval('ledger_entry_seq'), ?, ?, ?, 'USD')",
-                "seed-" + accountId, accountId, bd);
+                "seed-" + accountId,
+                accountId,
+                bd);
         jdbc.update(
                 "INSERT INTO ledger_entry(id, transfer_id, account_id, amount, asset) "
                         + "VALUES (nextval('ledger_entry_seq'), ?, 'funding', ?, 'USD')",
-                "seed-" + accountId, bd.negate());
+                "seed-" + accountId,
+                bd.negate());
     }
 
     @Test
@@ -44,12 +47,11 @@ class PostTransferIT {
         openAccount("dst");
         seedBalance("src", "500.00");
 
-        PostTransferResult result = pipeline.send(
-                new PostTransferCommand("t-1", "src", "dst", Money.of("120.00", Assets.USD)));
+        PostTransferResult result =
+                pipeline.send(new PostTransferCommand("t-1", "src", "dst", Money.of("120.00", Assets.USD)));
 
         assertThat(result.posted()).isTrue();
-        Long entries = jdbc.queryForObject(
-                "SELECT count(*) FROM ledger_entry WHERE transfer_id = 't-1'", Long.class);
+        Long entries = jdbc.queryForObject("SELECT count(*) FROM ledger_entry WHERE transfer_id = 't-1'", Long.class);
         assertThat(entries).isEqualTo(2L);
         java.math.BigDecimal sum = jdbc.queryForObject(
                 "SELECT sum(amount) FROM ledger_entry WHERE transfer_id = 't-1'", java.math.BigDecimal.class);
@@ -63,8 +65,8 @@ class PostTransferIT {
         seedBalance("poor", "10.00");
 
         long before = jdbc.queryForObject("SELECT count(*) FROM ledger_entry", Long.class);
-        PostTransferResult result = pipeline.send(
-                new PostTransferCommand("t-2", "poor", "rich", Money.of("100.00", Assets.USD)));
+        PostTransferResult result =
+                pipeline.send(new PostTransferCommand("t-2", "poor", "rich", Money.of("100.00", Assets.USD)));
 
         assertThat(result.posted()).isFalse();
         assertThat(result.reason()).isEqualTo("INSUFFICIENT_FUNDS");
@@ -81,8 +83,7 @@ class PostTransferIT {
         pipeline.send(new PostTransferCommand("t-3", "s2", "d2", Money.of("50.00", Assets.USD)));
         pipeline.send(new PostTransferCommand("t-3", "s2", "d2", Money.of("50.00", Assets.USD)));
 
-        Long entries = jdbc.queryForObject(
-                "SELECT count(*) FROM ledger_entry WHERE transfer_id = 't-3'", Long.class);
+        Long entries = jdbc.queryForObject("SELECT count(*) FROM ledger_entry WHERE transfer_id = 't-3'", Long.class);
         assertThat(entries).isEqualTo(2L);
     }
 }
