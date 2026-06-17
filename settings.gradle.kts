@@ -47,4 +47,5 @@ include(
     "starters:acme-avro-spring-boot-starter",
     "examples:demo-service",
     "examples:acme-bank:bank-contracts",
+    "examples:acme-bank:accounts",
 )
