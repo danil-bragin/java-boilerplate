@@ -25,6 +25,12 @@ public class SecurityAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
+    public com.acme.security.SecurityAuditorAware securityAuditorAware() {
+        return new com.acme.security.SecurityAuditorAware();
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
     public KeycloakJwtAuthenticationConverter keycloakJwtAuthenticationConverter() {
         return new KeycloakJwtAuthenticationConverter();
     }
