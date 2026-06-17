@@ -164,6 +164,18 @@ public final class Money implements Comparable<Money> {
         return allocate(ratios);
     }
 
+    /** Human/display string at the asset's scale (banker's rounding), e.g. "10.00 USD". */
+    public String format() {
+        return amount.setScale(asset.scale(), RoundingMode.HALF_EVEN).toPlainString() + " " + asset.code();
+    }
+
+    /** This amount as an integer count of the asset's smallest units (banker's rounding). */
+    public BigInteger toMinor() {
+        return amount.setScale(asset.scale(), RoundingMode.HALF_EVEN)
+                .movePointRight(asset.scale())
+                .toBigIntegerExact();
+    }
+
     public Money min(Money other) {
         return compareTo(other) <= 0 ? this : other;
     }
