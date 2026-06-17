@@ -1,0 +1,10 @@
+{
+  "namespace": "com.acme.demo.avro",
+  "type": "record",
+  "name": "OrderEventAvro",
+  "fields": [
+    { "name": "orderId", "type": "long" },
+    { "name": "sku", "type": "string" },
+    { "name": "quantity", "type": "int" }
+  ]
+}
