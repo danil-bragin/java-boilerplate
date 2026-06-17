@@ -26,7 +26,10 @@ public class OrderProjectionListener {
         this.mapper = mapper;
     }
 
-    @KafkaListener(topics = "orders", groupId = "demo-order-projection")
+    @KafkaListener(
+            topics = "orders",
+            groupId = "demo-order-projection",
+            containerFactory = "stringKafkaListenerContainerFactory")
     @Transactional
     public void on(String json) throws Exception {
         OrderCreated event = mapper.readValue(json, OrderCreated.class);
