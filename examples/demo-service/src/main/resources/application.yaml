@@ -33,3 +33,9 @@ management:
     web:
       exposure:
         include: health,info,prometheus
+resilience4j:
+  retry:
+    instances:
+      flaky:
+        max-attempts: 3
+        wait-duration: 10ms
