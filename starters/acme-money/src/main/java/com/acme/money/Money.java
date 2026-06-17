@@ -66,6 +66,49 @@ public final class Money implements Comparable<Money> {
         return amount.stripTrailingZeros().toPlainString();
     }
 
+    public Money add(Money other) {
+        requireSameAsset(other);
+        return new Money(amount.add(other.amount), asset);
+    }
+
+    public Money subtract(Money other) {
+        requireSameAsset(other);
+        return new Money(amount.subtract(other.amount), asset);
+    }
+
+    public Money multiply(BigDecimal factor) {
+        return new Money(amount.multiply(factor), asset);
+    }
+
+    public Money negate() {
+        return new Money(amount.negate(), asset);
+    }
+
+    public Money abs() {
+        return new Money(amount.abs(), asset);
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) {
+            return true;
+        }
+        if (!(o instanceof Money other)) {
+            return false;
+        }
+        return asset.equals(other.asset) && amount.compareTo(other.amount) == 0;
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(asset, amount.stripTrailingZeros());
+    }
+
+    @Override
+    public String toString() {
+        return toAmountString() + " " + asset.code();
+    }
+
     // --- internal helpers (later tasks add arithmetic/allocation/format) ---
 
     static BigDecimal parseBounded(String text) {
