@@ -44,4 +44,8 @@ public class Order extends AuditedEntity {
     public int getQuantity() {
         return quantity;
     }
+
+    public void changeQuantity(int quantity) {
+        this.quantity = quantity;
+    }
 }

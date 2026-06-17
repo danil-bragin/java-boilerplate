@@ -29,4 +29,16 @@ class OrderPersistenceIT {
         assertThat(found.getQuantity()).isEqualTo(3);
         assertThat(found.getCreatedAt()).isEqualTo(saved.getCreatedAt());
     }
+
+    @Test
+    void updateBumpsVersionAndAdvancesUpdatedAt() {
+        Order saved = orders.saveAndFlush(new Order("SKU-2", 1));
+
+        saved.changeQuantity(9);
+        Order updated = orders.saveAndFlush(saved);
+
+        assertThat(updated.getVersion()).isEqualTo(1L);
+        assertThat(updated.getQuantity()).isEqualTo(9);
+        assertThat(updated.getUpdatedAt()).isAfterOrEqualTo(updated.getCreatedAt());
+    }
 }
