@@ -4,6 +4,6 @@ build/
 .idea/
 *.iml
 .DS_Store
-out/
-bin/
+/out/
+/bin/
 .claude/
