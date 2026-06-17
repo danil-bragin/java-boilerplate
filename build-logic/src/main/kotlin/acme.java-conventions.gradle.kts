@@ -17,6 +17,11 @@ tasks.withType<Test>().configureEach {
     useJUnitPlatform()
 }
 
+dependencies {
+    // JUnit Platform Launcher is required on the test runtime classpath with JUnit 5.12+/Gradle 8.x.
+    "testRuntimeOnly"("org.junit.platform:junit-platform-launcher")
+}
+
 spotless {
     java {
         palantirJavaFormat()
