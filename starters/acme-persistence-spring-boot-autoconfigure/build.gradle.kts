@@ -6,6 +6,7 @@ dependencies {
     api(platform(project(":platform:acme-bom")))
     api(libs.spring.boot.autoconfigure)
     api(libs.spring.boot.starter.data.jpa)
+    api(project(":starters:acme-money"))
 
     annotationProcessor(libs.spring.boot.configuration.processor)
     annotationProcessor(libs.spring.boot.autoconfigure.processor)
