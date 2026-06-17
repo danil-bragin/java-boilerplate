@@ -40,5 +40,7 @@ include(
     "starters:acme-resilience-spring-boot-starter",
     "starters:acme-featureflags-spring-boot-autoconfigure",
     "starters:acme-featureflags-spring-boot-starter",
+    "starters:acme-messaging-spring-boot-autoconfigure",
+    "starters:acme-messaging-spring-boot-starter",
     "examples:demo-service",
 )
