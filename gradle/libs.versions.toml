@@ -2,6 +2,7 @@
 java = "21"
 spring-boot = "3.5.6"
 shedlock = "6.9.2"
+pipelinr = "0.11"
 
 [libraries]
 spring-boot-dependencies = { module = "org.springframework.boot:spring-boot-dependencies", version.ref = "spring-boot" }
@@ -29,6 +30,7 @@ micrometer-registry-otlp = { module = "io.micrometer:micrometer-registry-otlp" }
 micrometer-registry-prometheus = { module = "io.micrometer:micrometer-registry-prometheus" }
 shedlock-spring = { module = "net.javacrumbs.shedlock:shedlock-spring", version.ref = "shedlock" }
 shedlock-provider-jdbc-template = { module = "net.javacrumbs.shedlock:shedlock-provider-jdbc-template", version.ref = "shedlock" }
+pipelinr = { module = "net.sizovs:pipelinr", version.ref = "pipelinr" }
 
 [plugins]
 spring-boot = { id = "org.springframework.boot", version.ref = "spring-boot" }
