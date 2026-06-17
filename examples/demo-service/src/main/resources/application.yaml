@@ -7,6 +7,12 @@ spring:
     open-in-view: false
   flyway:
     locations: classpath:db/migration/{vendor}
+  modulith:
+    events:
+      jdbc:
+        schema-initialization:
+          enabled: true
+      republish-outstanding-events-on-restart: true
 server:
   port: 8080
   shutdown: graceful
