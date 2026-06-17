@@ -20,7 +20,7 @@ state change and delivered to Kafka, without dual-write loss and without XA.
   `-events-kafka`. Modulith self-configures; the app declares the event + topic via `@Externalized`.
 - `JpaEventPublication` is a JPA entity, so with `ddl-auto: validate` the `event_publication` table
   must exist before startup: it is created by Flyway (V3 migration), consistent with the Flyway-owns-DDL
-  approach. (Modulith's own schema auto-init remains enabled as a fallback.)
+  approach. (On the JPA events path Modulith ships no schema initializer, so Flyway solely owns the table.)
 - Effectively-once end-to-end requires pairing this at-least-once outbox with an idempotent inbox
   on the consumer side — deferred to SP-4b (which also switches the wire format to Avro + Confluent
   Schema Registry).

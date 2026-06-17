@@ -9,9 +9,7 @@ spring:
     locations: classpath:db/migration/{vendor}
   modulith:
     events:
-      jdbc:
-        schema-initialization:
-          enabled: true
+      # On the JPA events path the event_publication table is owned by Flyway (V3 migration).
       republish-outstanding-events-on-restart: true
 server:
   port: 8080
