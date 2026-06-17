@@ -2,17 +2,22 @@ package com.acme.messaging.autoconfigure;
 
 import com.acme.messaging.Inbox;
 import com.acme.messaging.JdbcInbox;
+import java.util.Map;
+import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.common.serialization.StringSerializer;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.jdbc.JdbcTemplateAutoConfiguration;
+import org.springframework.boot.autoconfigure.kafka.ConcurrentKafkaListenerContainerFactoryConfigurer;
 import org.springframework.boot.autoconfigure.kafka.KafkaAutoConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
 import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.core.ProducerFactory;
 import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
 import org.springframework.kafka.listener.DefaultErrorHandler;
 import org.springframework.kafka.support.converter.MessagingMessageConverter;
@@ -30,11 +35,31 @@ public class MessagingAutoConfiguration {
         return new JdbcInbox(jdbcTemplate);
     }
 
+    /**
+     * A {@link DefaultErrorHandler} that routes failed records to a dead-letter topic after
+     * {@code FixedBackOff(200ms × 2)} retries.
+     *
+     * <p>Derives a dedicated DLT {@link KafkaTemplate} from the auto-configured
+     * {@link ProducerFactory} (which already has the correct {@code bootstrap.servers}), overriding
+     * only the key/value serializers to {@link StringSerializer}. This avoids a
+     * {@code ByteArraySerializer} type mismatch when {@code String}-valued records consumed via
+     * {@code StringDeserializer} need to be re-published to the dead-letter topic.
+     */
     @Bean
-    @ConditionalOnBean(KafkaTemplate.class)
+    @ConditionalOnBean(ProducerFactory.class)
     @ConditionalOnMissingBean
-    public DefaultErrorHandler kafkaErrorHandler(KafkaTemplate<Object, Object> template) {
-        return new DefaultErrorHandler(new DeadLetterPublishingRecoverer(template), new FixedBackOff(200L, 2L));
+    public DefaultErrorHandler kafkaErrorHandler(ProducerFactory<Object, Object> producerFactory) {
+        // Derive a DLT producer factory from the auto-configured one (inheriting bootstrap.servers,
+        // security, etc.) but override serializers to String so String-valued consumer records can
+        // be re-published without a ByteArraySerializer type mismatch. The raw cast is safe because
+        // we are overriding the serializer classes to StringSerializer.
+        @SuppressWarnings({"rawtypes", "unchecked"})
+        ProducerFactory<String, String> dltFactory = (ProducerFactory<String, String>)
+                (ProducerFactory) producerFactory.copyWithConfigurationOverride(Map.of(
+                        ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class,
+                        ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class));
+        KafkaTemplate<String, String> dltTemplate = new KafkaTemplate<>(dltFactory);
+        return new DefaultErrorHandler(new DeadLetterPublishingRecoverer(dltTemplate), new FixedBackOff(200L, 2L));
     }
 
     /**
@@ -43,15 +68,24 @@ public class MessagingAutoConfiguration {
      * applying any JSON message converter. This avoids interference when Spring Modulith's
      * {@code ByteArrayJsonMessageConverter} is on the classpath and the listener wants a plain
      * {@code String}.
+     *
+     * <p>Routes through Boot's {@link ConcurrentKafkaListenerContainerFactoryConfigurer} so the
+     * auto-detected {@code CommonErrorHandler} (our {@code kafkaErrorHandler} DefaultErrorHandler →
+     * DLT) is attached to the factory. The record message converter is then overridden to pass raw
+     * String payloads through.
      */
     @Bean
     @ConditionalOnBean(ConsumerFactory.class)
     @ConditionalOnMissingBean(name = "stringKafkaListenerContainerFactory")
-    public ConcurrentKafkaListenerContainerFactory<String, String> stringKafkaListenerContainerFactory(
-            ConsumerFactory<String, String> consumerFactory) {
-        ConcurrentKafkaListenerContainerFactory<String, String> factory =
+    public ConcurrentKafkaListenerContainerFactory<Object, Object> stringKafkaListenerContainerFactory(
+            ConcurrentKafkaListenerContainerFactoryConfigurer configurer,
+            ConsumerFactory<Object, Object> consumerFactory) {
+        ConcurrentKafkaListenerContainerFactory<Object, Object> factory =
                 new ConcurrentKafkaListenerContainerFactory<>();
-        factory.setConsumerFactory(consumerFactory);
+        // configurer applies Boot's listener properties AND the auto-detected common error handler
+        // (our kafkaErrorHandler DefaultErrorHandler -> DLT). Then override only the converter so raw
+        // String payloads pass through (bypassing Modulith's global ByteArrayJsonMessageConverter).
+        configurer.configure(factory, consumerFactory);
         factory.setRecordMessageConverter(new MessagingMessageConverter());
         return factory;
     }
