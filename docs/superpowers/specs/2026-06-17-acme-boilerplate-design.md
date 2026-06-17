@@ -268,3 +268,29 @@ Deliberately NOT ported from go-boilerplate:
 - [ ] **target Oracle version** — default 19c (LTS, auto-init off + Flyway). If 23ai — could enable Modulith auto-init + native BOOLEAN. Confirm infra. (currently assumed: 19c-conservative)
 - [ ] exact plugin patch versions (Spotless, palantir, avro) — pin at adoption
 - [ ] Oracle JDBC driver historically not on Maven Central — verify `ojdbc11` availability (now on Central, but closed networks need the Oracle maven repo)
+
+---
+
+## 13. Implementation status (2026-06-18)
+
+Built and verified end-to-end on Testcontainers (Postgres + Redpanda), `gradle build` green, every increment final-reviewed (READY TO MERGE). 19 starter modules + `acme-bom` + `acme-test-support`; 26 demo integration tests; 9 ADRs.
+
+| SP | Scope | Key proof |
+|---|---|---|
+| SP-0 | monorepo skeleton (build-logic, BOM, catalog) + `acme-web` (RFC 9457 problem+json) | starter auto-configures handler in demo e2e |
+| SP-1 | `acme-persistence` (JPA, clock-backed auditing, Flyway `{vendor}`, Oracle-first/DB-agnostic) | persist+retrieve, `@Version`, SEQUENCE id, update-path |
+| SP-2 | `acme-observability` (Micrometer OTel→OTLP, Actuator probes, ShedLock `usingDbTime`, graceful shutdown, validated props) | liveness/readiness UP, Tracer bean, real DB lock row |
+| SP-3 | `acme-cqrs` (PipelinR bus + explicit middleware: validation, `StronglyConsistent` tx gating) | dispatch, validation, rollback + no-rollback (relaxation) |
+| SP-4 | `acme-outbox` (Spring Modulith event registry + Kafka externalization) | `OrderCreated` externalized to real Redpanda topic |
+| SP-4b | `acme-messaging` (JDBC inbox + DLT error handler) → effectively-once | projection exactly-once, dedup on redelivery, poison→`orders-dlt` |
+| SP-5 | `acme-security` (OAuth2 JWT resource server + Keycloak role map + method RBAC) | 401/403/200/public matrix; converter end-to-end |
+| SP-6 | `acme-cache` (Caffeine), `acme-resilience` (Resilience4j), `acme-featureflags` (OpenFeature) | caching hit-count, retry recovery, flag eval |
+
+### Recurring gotcha (recorded)
+
+V: auto-config bean gated by `@ConditionalOnBean(X)` MUST add `@AutoConfiguration(after = {…that contributes X})` — else the condition evaluates before X is registered and the bean is silently skipped. Hit 3× (ShedLock, CQRS `TransactionMiddleware`, messaging `Inbox`); each caught only by an integration test asserting the downstream effect, not by context-starts-green. Lesson: conditional-on-bean wiring needs an effect-asserting IT, not just a smoke test.
+
+### Deferred (documented, not built)
+
+- **Avro + Confluent Schema Registry** (fork B1): wire format stays JSON; needs Confluent Maven repo + Avro codegen + SR wiring. Mechanics (outbox/inbox/effectively-once) unaffected.
+- Tiered retry topics (`@RetryableTopic`), per-key ordering knobs, Redis L2 / two-tier cache, Oracle Testcontainers run (image unavailable in this env; Oracle ships as reference config + vendor migrations), audit hash-chain (Envers baseline only), containerization/CI-schema-gate/local compose stack, top-level README.
