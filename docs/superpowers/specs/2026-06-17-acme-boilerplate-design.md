@@ -285,12 +285,25 @@ Built and verified end-to-end on Testcontainers (Postgres + Redpanda), `gradle b
 | SP-4b | `acme-messaging` (JDBC inbox + DLT error handler) → effectively-once | projection exactly-once, dedup on redelivery, poison→`orders-dlt` |
 | SP-5 | `acme-security` (OAuth2 JWT resource server + Keycloak role map + method RBAC) | 401/403/200/public matrix; converter end-to-end |
 | SP-6 | `acme-cache` (Caffeine), `acme-resilience` (Resilience4j), `acme-featureflags` (OpenFeature) | caching hit-count, retry recovery, flag eval |
+| SP-7 | repo polish: top-level README, `compose.yaml` local stack (Postgres/Redpanda/Keycloak/otel-lgtm), `bootBuildImage` + `.dockerignore` | `docker compose config` valid, build green |
+| SP-8 | `acme-avro` (Confluent serde) + Avro schema codegen | `OrderEventAvro` round-trips through real Redpanda Schema Registry |
+| SP-9 | `acme-cache` opt-in two-tier (Caffeine L1 + Redis L2, `TwoTierCacheManager`) | two-tier manager active + cached (Redis Testcontainers) |
+| SP-10 | audit attribution: `@CreatedBy`/`@LastModifiedBy` via `SecurityAuditorAware` | `created_by=alice` authenticated, null anonymous |
 
 ### Recurring gotcha (recorded)
 
 V: auto-config bean gated by `@ConditionalOnBean(X)` MUST add `@AutoConfiguration(after = {…that contributes X})` — else the condition evaluates before X is registered and the bean is silently skipped. Hit 3× (ShedLock, CQRS `TransactionMiddleware`, messaging `Inbox`); each caught only by an integration test asserting the downstream effect, not by context-starts-green. Lesson: conditional-on-bean wiring needs an effect-asserting IT, not just a smoke test.
 
-### Deferred (documented, not built)
+### Now built (was deferred) — SP-7..SP-10
 
-- **Avro + Confluent Schema Registry** (fork B1): wire format stays JSON; needs Confluent Maven repo + Avro codegen + SR wiring. Mechanics (outbox/inbox/effectively-once) unaffected.
-- Tiered retry topics (`@RetryableTopic`), per-key ordering knobs, Redis L2 / two-tier cache, Oracle Testcontainers run (image unavailable in this env; Oracle ships as reference config + vendor migrations), audit hash-chain (Envers baseline only), containerization/CI-schema-gate/local compose stack, top-level README.
+README + local compose stack + container image (SP-7); Avro + Schema Registry serde as the `acme-avro` starter, proven against a real SR (SP-8); opt-in two-tier Caffeine+Redis cache (SP-9); audit who-attribution (SP-10). 20 starter modules total, 11 ADRs.
+
+### Still deferred (documented, not built)
+
+- **Avro in the Modulith outbox path**: Avro+SR ships as a standalone capability (SP-8); migrating the outbox itself to Avro needs a custom Modulith externalizer (Modulith publishes a JSON string, not a `SpecificRecord`).
+- **Cross-instance L1 cache invalidation** via Redis pub/sub (two-tier evict clears local L1 + shared L2; remote L1 entries expire by TTL).
+- **Tiered retry topics** (`@RetryableTopic`) — the blocking `DefaultErrorHandler`→DLT path covers poison handling; tiered non-blocking retry is an alternative.
+- **Hibernate Envers full revision history** and **tamper-evident hash-chained audit log** — SP-10 ships the lightweight who-attribution; these heavier options remain open.
+- **CI Schema-Registry compatibility gate run** (imflog plugin `testSchemasTask`) — recommended next step, needs a live/Testcontainers SR in CI.
+- **Oracle Testcontainers run** — image unavailable in this environment; Oracle ships as reference config + vendor migrations (V1–V5).
+- Per-key ordering knobs.
