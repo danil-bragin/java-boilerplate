@@ -4,6 +4,8 @@ spring-boot = "3.5.6"
 shedlock = "6.9.2"
 pipelinr = "0.11"
 spring-modulith = "1.4.6"
+resilience4j = "2.4.0"
+openfeature = "1.20.2"
 
 [libraries]
 spring-boot-dependencies = { module = "org.springframework.boot:spring-boot-dependencies", version.ref = "spring-boot" }
@@ -41,6 +43,11 @@ testcontainers-redpanda = { module = "org.testcontainers:redpanda" }
 spring-boot-starter-security = { module = "org.springframework.boot:spring-boot-starter-security" }
 spring-boot-starter-oauth2-resource-server = { module = "org.springframework.boot:spring-boot-starter-oauth2-resource-server" }
 spring-security-test = { module = "org.springframework.security:spring-security-test" }
+spring-boot-starter-cache = { module = "org.springframework.boot:spring-boot-starter-cache" }
+spring-boot-starter-aop = { module = "org.springframework.boot:spring-boot-starter-aop" }
+caffeine = { module = "com.github.ben-manes.caffeine:caffeine" }
+resilience4j-spring-boot3 = { module = "io.github.resilience4j:resilience4j-spring-boot3", version.ref = "resilience4j" }
+openfeature-sdk = { module = "dev.openfeature:sdk", version.ref = "openfeature" }
 
 [plugins]
 spring-boot = { id = "org.springframework.boot", version.ref = "spring-boot" }
