@@ -48,14 +48,32 @@ class CreateOrderCommandIT {
         assertThat(orders.count()).isEqualTo(before);
     }
 
+    @Test
+    void nonStronglyConsistentCommandDoesNotRollBack() {
+        long before = orders.count();
+        // No StronglyConsistent marker -> TransactionMiddleware opens no transaction. The save runs
+        // in its own (committed) transaction before the handler throws, so the row persists.
+        assertThatThrownBy(() -> pipeline.send(new EventualOrderCommand("SKU-EVENTUAL")))
+                .isInstanceOf(IllegalStateException.class);
+        assertThat(orders.count()).isEqualTo(before + 1);
+    }
+
     /** Test-only strongly-consistent command whose handler saves then fails. */
     record FailingOrderCommand(String sku) implements Command<Void>, StronglyConsistent {}
+
+    /** Test-only command WITHOUT the StronglyConsistent marker (eventual consistency path). */
+    record EventualOrderCommand(String sku) implements Command<Void> {}
 
     @TestConfiguration
     static class FailingConfig {
         @Bean
         FailingOrderCommandHandler failingOrderCommandHandler(OrderRepository orders) {
             return new FailingOrderCommandHandler(orders);
+        }
+
+        @Bean
+        EventualOrderCommandHandler eventualOrderCommandHandler(OrderRepository orders) {
+            return new EventualOrderCommandHandler(orders);
         }
     }
 
@@ -68,6 +86,20 @@ class CreateOrderCommandIT {
 
         @Override
         public Void handle(FailingOrderCommand command) {
+            orders.save(new Order(command.sku(), 1));
+            throw new IllegalStateException("boom after save");
+        }
+    }
+
+    static class EventualOrderCommandHandler implements Command.Handler<EventualOrderCommand, Void> {
+        private final OrderRepository orders;
+
+        EventualOrderCommandHandler(OrderRepository orders) {
+            this.orders = orders;
+        }
+
+        @Override
+        public Void handle(EventualOrderCommand command) {
             orders.save(new Order(command.sku(), 1));
             throw new IllegalStateException("boom after save");
         }
