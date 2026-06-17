@@ -1,5 +1,6 @@
 package com.acme.demo;
 
+import an.awesome.pipelinr.Pipeline;
 import com.acme.web.error.ApiException;
 import jakarta.validation.Valid;
 import java.util.Map;
@@ -16,17 +17,19 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/v1/orders")
 public class OrderController {
 
+    private final Pipeline pipeline;
     private final OrderRepository orders;
 
-    public OrderController(OrderRepository orders) {
+    public OrderController(Pipeline pipeline, OrderRepository orders) {
+        this.pipeline = pipeline;
         this.orders = orders;
     }
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public Map<String, Object> create(@Valid @RequestBody CreateOrderRequest req) {
-        Order saved = orders.save(new Order(req.sku(), req.quantity()));
-        return Map.of("id", saved.getId(), "sku", saved.getSku(), "quantity", saved.getQuantity());
+        Long id = pipeline.send(new CreateOrderCommand(req.sku(), req.quantity()));
+        return Map.of("id", id, "sku", req.sku(), "quantity", req.quantity());
     }
 
     @GetMapping("/{id}")

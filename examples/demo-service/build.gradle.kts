@@ -8,6 +8,7 @@ dependencies {
     implementation(project(":starters:acme-web-spring-boot-starter"))
     implementation(project(":starters:acme-persistence-spring-boot-starter"))
     implementation(project(":starters:acme-observability-spring-boot-starter"))
+    implementation(project(":starters:acme-cqrs-spring-boot-starter"))
     testImplementation(project(":starters:acme-test-support"))
     testImplementation(libs.spring.boot.starter.test)
 }
