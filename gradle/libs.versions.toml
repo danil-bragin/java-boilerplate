@@ -9,6 +9,8 @@ resilience4j = "2.4.0"
 openfeature = "1.20.2"
 confluent = "7.9.1"
 avro = "1.11.4"
+jmolecules = "2025.0.2"
+archunit = "1.4.2"
 
 [libraries]
 spring-boot-dependencies = { module = "org.springframework.boot:spring-boot-dependencies", version.ref = "spring-boot" }
@@ -55,6 +57,11 @@ openfeature-sdk = { module = "dev.openfeature:sdk", version.ref = "openfeature" 
 kafka-avro-serializer = { module = "io.confluent:kafka-avro-serializer", version.ref = "confluent" }
 avro = { module = "org.apache.avro:avro", version.ref = "avro" }
 jqwik = { module = "net.jqwik:jqwik", version.ref = "jqwik" }
+jmolecules-bom = { module = "org.jmolecules:jmolecules-bom", version.ref = "jmolecules" }
+jmolecules-ddd = { module = "org.jmolecules:jmolecules-ddd" }
+jmolecules-events = { module = "org.jmolecules:jmolecules-events" }
+jmolecules-archunit = { module = "org.jmolecules.integrations:jmolecules-archunit" }
+archunit-junit5 = { module = "com.tngtech.archunit:archunit-junit5", version.ref = "archunit" }
 
 [plugins]
 spring-boot = { id = "org.springframework.boot", version.ref = "spring-boot" }
