@@ -17,7 +17,10 @@ exactly once without distributed transactions.
   handler skips already-applied effects. Called inside the handler transaction, the dedup marker and
   the side effect commit atomically — effectively-once on top of at-least-once delivery.
 - A default `DefaultErrorHandler` + `DeadLetterPublishingRecoverer` routes poison records to
-  `<topic>.DLT` after bounded retries.
+  `<topic>-dlt` after bounded retries (Spring Kafka's default suffix). The custom
+  `stringKafkaListenerContainerFactory` is built via Boot's
+  `ConcurrentKafkaListenerContainerFactoryConfigurer` so this error handler is actually attached;
+  `DltRoutingIT` proves a poison record reaches `orders-dlt`.
 - The demo consumes externalized `OrderCreated` and builds an `order_projection` read-model
   idempotently; an IT proves the full outbox->Kafka->inbox->projection path applies exactly once, and
   a redelivery applies the projection once.
