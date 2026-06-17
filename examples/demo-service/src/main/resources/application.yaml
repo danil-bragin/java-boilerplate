@@ -1,5 +1,11 @@
 spring:
   application:
     name: demo-service
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+  flyway:
+    locations: classpath:db/migration/{vendor}
 server:
   port: 8080
