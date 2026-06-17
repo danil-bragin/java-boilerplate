@@ -19,7 +19,12 @@ while staying testable without standing up an identity provider.
   standard scopes), so `@PreAuthorize("hasRole('...')")` works against Keycloak realm roles.
 - A default, overridable `SecurityFilterChain` permits a configurable path list (actuator
   health/info by default) and authenticates everything else; method security is enabled.
-- Tests use spring-security-test's `jwt()` post-processor (mock JWTs) to verify the 401/403/200
-  matrix without a Keycloak container; the converter's claim mapping is unit-tested directly.
+- **Secure-by-default note:** only `/actuator/health/**` and `/actuator/info` are public; everything
+  else — including `/actuator/prometheus` — requires a JWT. If your Prometheus scraper cannot
+  authenticate, either scrape over a separate management port/network policy or add
+  `/actuator/prometheus` to `acme.security.permit-paths`.
+- Tests use spring-security-test's `jwt()` post-processor (mock JWTs) for the 401/403/200 matrix; the
+  converter's claim mapping is unit-tested directly AND exercised end-to-end through the real filter
+  chain via a stub `JwtDecoder` (`SecurityConverterIT`), proving it is wired into the resource server.
 
 Full detail: `docs/superpowers/specs/2026-06-17-acme-boilerplate-design.md` §5 (acme-security).
