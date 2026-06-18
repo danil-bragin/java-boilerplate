@@ -13,6 +13,10 @@ name: acme-bank-local
 services:
   postgres:
     image: postgres:16-alpine
+    # Infra mem_limits (BANK-18 OOM fix) cap the non-JVM footprint so the five service JVMs + the
+    # co-located Gatling driver fit the ~8GB host. Postgres uses shared_buffers + page cache; 512m is
+    # ample for the example's one-DB-per-service workload.
+    mem_limit: 512m
     environment:
       POSTGRES_DB: bank
       POSTGRES_USER: acme
@@ -29,6 +33,9 @@ services:
 
   redpanda:
     image: redpandadata/redpanda:v24.2.7
+    # Redpanda is already told `--memory=1G --reserve-memory=0M`; cap the container a touch above that
+    # to bound the seastar allocator + overhead.
+    mem_limit: 1280m
     command:
       - redpanda
       - start
@@ -50,6 +57,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    mem_limit: 256m
     ports: ["6379:6379"]
     healthcheck:
       test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
@@ -59,6 +67,8 @@ services:
 
   keycloak:
     image: quay.io/keycloak/keycloak:26.0
+    # Keycloak runs its own JVM; cap it so dev-mode heap growth can't eat the service budget.
+    mem_limit: 640m
     command: ["start-dev", "--import-realm"]
     environment:
       KEYCLOAK_ADMIN: admin
@@ -89,6 +99,9 @@ services:
 
   observability:
     image: grafana/otel-lgtm:latest
+    # otel-lgtm bundles Grafana+Loki+Tempo+Mimir+Prometheus — the heaviest infra container. Cap it so
+    # a trace/metric backlog can't starve the services.
+    mem_limit: 1280m
     ports:
       - "3000:3000"   # Grafana
       - "4317:4317"   # OTLP gRPC
@@ -105,6 +118,19 @@ services:
   gateway:
     build:
       context: ./gateway
+    # MEMORY BUDGET (BANK-18 OOM fix): every service JVM runs `java -XX:MaxRAMPercentage=75` which
+    # sizes the max heap from the *cgroup* limit. WITHOUT a per-container limit each of the five JVMs
+    # reads the FULL ~8GB host and sizes its heap to ~6GB — five 6GB heaps on an 8GB host over-commit,
+    # so under sustained mixed load the kernel OOM-killer fires and (the gateway being the densest
+    # worker in MIXED) kills the gateway first. Pinning mem_limit makes each JVM size its heap from the
+    # limit (gateway → ~768m heap) AND caps the host footprint so the stack fits ~8GB with headroom.
+    # Budget (services 1.0+0.75+0.75+0.64+0.64 = 3.78G) + infra ≈ 7.4G, leaving room for the
+    # co-located Gatling driver during a sweep. deploy.resources mirrors mem_limit for swarm/v2 parity.
+    mem_limit: 1024m
+    deploy:
+      resources:
+        limits:
+          memory: 1024m
     depends_on:
       postgres: {condition: service_healthy}
       redpanda: {condition: service_healthy}
@@ -134,6 +160,11 @@ services:
   transfers:
     build:
       context: ./transfers
+    mem_limit: 768m
+    deploy:
+      resources:
+        limits:
+          memory: 768m
     depends_on:
       postgres: {condition: service_healthy}
       redpanda: {condition: service_healthy}
@@ -156,6 +187,11 @@ services:
   accounts:
     build:
       context: ./accounts
+    mem_limit: 768m
+    deploy:
+      resources:
+        limits:
+          memory: 768m
     depends_on:
       postgres: {condition: service_healthy}
       redpanda: {condition: service_healthy}
@@ -178,6 +214,11 @@ services:
   antifraud:
     build:
       context: ./antifraud
+    mem_limit: 640m
+    deploy:
+      resources:
+        limits:
+          memory: 640m
     depends_on:
       postgres: {condition: service_healthy}
       redpanda: {condition: service_healthy}
@@ -198,6 +239,11 @@ services:
   notifications:
     build:
       context: ./notifications
+    mem_limit: 640m
+    deploy:
+      resources:
+        limits:
+          memory: 640m
     depends_on:
       postgres: {condition: service_healthy}
       redpanda: {condition: service_healthy}
