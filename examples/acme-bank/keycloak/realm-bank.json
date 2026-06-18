@@ -1,0 +1,82 @@
+{
+  "realm": "bank",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "accessTokenLifespan": 300,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 36000,
+  "roles": {
+    "realm": [
+      {
+        "name": "customer",
+        "description": "Bank customer — can manage their own accounts and transfers."
+      },
+      {
+        "name": "teller",
+        "description": "Bank teller — back-office operator."
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "bank-gateway",
+      "name": "Bank Gateway",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "redirectUris": ["*"],
+      "webOrigins": ["*"],
+      "protocol": "openid-connect"
+    },
+    {
+      "clientId": "bank-swagger",
+      "name": "Bank Swagger UI",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": ["*"],
+      "webOrigins": ["*"],
+      "protocol": "openid-connect"
+    }
+  ],
+  "users": [
+    {
+      "username": "alice",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "alice@example.com",
+      "firstName": "Alice",
+      "lastName": "Customer",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "alice",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["customer"]
+    },
+    {
+      "username": "teller",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "teller@example.com",
+      "firstName": "Tom",
+      "lastName": "Teller",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "teller",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["teller"]
+    }
+  ]
+}
