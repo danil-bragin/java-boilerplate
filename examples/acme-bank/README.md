@@ -61,19 +61,28 @@ non-terminal transfers (`REQUESTED`/`APPROVED`/`POSTING`) whose `updated_at` is 
 |------------------------|-----------------------------|------------------------------------------------------------------------|
 | `REQUESTED`            | `> nudge-after`             | re-emit `transfer-requested` (re-screen; idempotent)                   |
 | `APPROVED`             | `> nudge-after`             | re-emit `posting-requested` (re-drive the posting)                     |
-| `REQUESTED`/`APPROVED` | `> fail-after`              | `timeOut()` → `FAILED(SAGA_TIMEOUT)` + `transfer-failed` (pre-money — always safe) |
-| `POSTING` + posted     | any                         | `complete()` → `COMPLETED` + `transfer-completed` (recovers a lost `ledger-posted`) |
-| `POSTING` + not posted | `nudge-after < age < fail`  | re-emit `posting-requested` (idempotent at accounts)                   |
-| `POSTING` + not posted | `> fail-after`              | `fail(SAGA_TIMEOUT)` + `transfer-failed` (money confirmed not moved → safe) |
-| `POSTING` + **no answer** | any                      | **skip** — never fail money on a transport error                       |
+| `REQUESTED`/`APPROVED` | `> fail-after`              | `timeOut()` → `FAILED(SAGA_TIMEOUT)` + `transfer-failed` (pre-money — **the only auto-FAILED path**, provably no money moved) |
+| `POSTING` + posted     | any                         | `complete()` → `COMPLETED` + `transfer-completed` (recovers a lost `ledger-posted`; money provably moved) |
+| `POSTING` + not posted | any                         | re-emit `posting-requested` (idempotent at accounts) — **never failed** |
+| `POSTING` + not posted | `> stuck-after`             | emit `acme.saga.stuck` metric + WARN ("page a human"); **state stays `POSTING`** (re-drive continues) |
+| `POSTING` + **no answer** | any                      | **skip** — never act on a transport error                              |
 
 **The money truth.** `POSTING` is the one state where money may already have moved, so it is
-**never blindly timed out**. The reconciler asks accounts — the ledger is the source of truth —
-via `GET /internal/postings/{id}` → `{transferId, posted}` (`AccountsPostingClient`, resilience4j
-instance `accounts-reconcile`). The client returns `Optional<Boolean>`:
+**never auto-failed** by the reconciler. A `posted=false` answer is a *point-in-time snapshot* ("not
+posted *yet*"), not a proof money never moved: a still-in-flight `posting-requested` (unconsumed
+inbox / retry backoff / in `posting-requested-dlt` awaiting replay) could post **after** the
+reconciler ran — failing it would leave a `FAILED` transfer whose money moved. So a `POSTING`
+transfer is terminalized **only** by accounts' authority: `ledger-posted` → `COMPLETED` or
+`posting-rejected` → `FAILED` (the `PostingResultListener` path). The reconciler asks accounts — the
+ledger is the source of truth — via `GET /internal/postings/{id}` → `{transferId, posted}`
+(`AccountsPostingClient`, resilience4j instance `accounts-reconcile`). The client returns
+`Optional<Boolean>`:
 
 - `true` → ledger posted; complete (a lost `ledger-posted` is recovered).
-- `false` and past `fail-after` → money confirmed not moved; fail with `SAGA_TIMEOUT`.
+- `false` → **re-drive only**: re-emit `posting-requested`, regardless of age (idempotent — if
+  accounts posts late, the next reconcile sees `true` and completes). Never failed.
+- `false` and past `stuck-after` → emit `acme.saga.stuck` (tagged by status) + WARN for manual
+  resolution; state stays `POSTING`.
 - `empty` (5xx/timeout/open circuit) → **skip this round** — the transfer is left untouched.
 
 The `/internal/**` query is network-segmented: it is permitted without a bearer
@@ -86,7 +95,8 @@ Kafka message. This is safe because every consumer is **inbox-deduped** and the 
 **PK-anchored** (BANK-11), so a redelivery never double-screens or double-posts.
 
 **Thresholds** (`acme.bank.reconciler.*`, env-overridable): `nudge-after` (default `PT30S`),
-`fail-after` (default `PT5M`), `fixed-delay` (default `PT15S`), `batch-size` (`100`), `enabled`.
+`fail-after` (default `PT5M`, pre-money only), `stuck-after` (default `PT15M`, the POSTING
+"page a human" threshold), `fixed-delay` (default `PT15S`), `batch-size` (`100`), `enabled`.
 
 **DLT alerting.** The reconciler handles *silent hangs* (lost events). The complementary
 *poison* path — a message that fails past retries and is routed to `<topic>-dlt` — increments a
