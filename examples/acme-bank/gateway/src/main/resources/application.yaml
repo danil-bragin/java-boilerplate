@@ -1,0 +1,71 @@
+spring:
+  application:
+    name: gateway
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+  flyway:
+    locations: classpath:db/migration/{vendor}
+  kafka:
+    consumer:
+      group-id: gateway
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: io.confluent.kafka.serializers.KafkaAvroDeserializer
+      properties:
+        specific.avro.reader: true
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          jwk-set-uri: ${KEYCLOAK_JWKS:http://localhost:8082/realms/bank/protocol/openid-connect/certs}
+
+acme:
+  security:
+    permit-paths:
+      - /actuator/health/**
+      - /actuator/info
+      - /openapi/**
+      - /swagger-ui/**
+      - /swagger-ui.html
+      - /v3/api-docs/**
+
+gateway:
+  transfers:
+    base-url: ${TRANSFERS_BASE_URL:http://localhost:8081}
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      transfers:
+        sliding-window-size: 10
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 5s
+        permitted-number-of-calls-in-half-open-state: 3
+  retry:
+    instances:
+      transfers:
+        max-attempts: 3
+        wait-duration: 200ms
+
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    url: /openapi/bank-api.yaml
+
+bucket4j:
+  enabled: true
+  filters:
+    - cache-name: rate-limit-buckets
+      url: /v1/.*
+      strategy: first
+      http-status-code: TOO_MANY_REQUESTS
+      rate-limits:
+        - cache-key: "@request.remoteAddr"
+          bandwidths:
+            - capacity: 100
+              time: 1
+              unit: minutes
+              refill-speed: greedy

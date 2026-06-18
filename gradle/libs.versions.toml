@@ -12,6 +12,10 @@ confluent = "7.9.1"
 avro = "1.11.4"
 jmolecules = "2025.0.2"
 archunit = "1.4.2"
+openapi-generator = "7.9.0"
+springdoc = "2.6.0"
+swagger-annotations = "2.2.22"
+jackson-databind-nullable = "0.2.6"
 
 [libraries]
 spring-boot-dependencies = { module = "org.springframework.boot:spring-boot-dependencies", version.ref = "spring-boot" }
@@ -65,7 +69,11 @@ jmolecules-archunit = { module = "org.jmolecules.integrations:jmolecules-archuni
 archunit-junit5 = { module = "com.tngtech.archunit:archunit-junit5", version.ref = "archunit" }
 awaitility = { module = "org.awaitility:awaitility" }
 bucket4j-spring-boot-starter = { module = "com.giffing.bucket4j.spring.boot.starter:bucket4j-spring-boot-starter", version.ref = "bucket4j" }
+springdoc-openapi-starter-webmvc-ui = { module = "org.springdoc:springdoc-openapi-starter-webmvc-ui", version.ref = "springdoc" }
+swagger-annotations = { module = "io.swagger.core.v3:swagger-annotations", version.ref = "swagger-annotations" }
+jackson-databind-nullable = { module = "org.openapitools:jackson-databind-nullable", version.ref = "jackson-databind-nullable" }
 
 [plugins]
 spring-boot = { id = "org.springframework.boot", version.ref = "spring-boot" }
 avro = { id = "com.github.davidmc24.gradle.plugin.avro", version = "1.9.1" }
+openapi-generator = { id = "org.openapi.generator", version.ref = "openapi-generator" }
