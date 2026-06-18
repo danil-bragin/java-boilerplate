@@ -4,6 +4,7 @@ import com.acme.bank.contracts.MoneyMapper;
 import com.acme.messaging.Inbox;
 import com.acme.persistence.MoneyAmount;
 import java.time.Instant;
+import java.util.List;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -15,6 +16,13 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * <p>This is a read-model projection, not a money optimization: the gateway holds no balances and
  * enforces no money invariants — those live in the owning services.
+ *
+ * <p>BANK-19b: the four listeners are BATCH listeners (see {@code BatchListenerConfig}) — a poll of N
+ * events is applied in ONE transaction, amortizing the commit (and, with {@code synchronous_commit=off}
+ * on the gateway datasource, the projection's fsync is already off the hot path). Per-record inbox dedup
+ * and the monotonic rank guard are applied inside the batch loop, so dedup and status-monotonicity hold;
+ * a partial-batch failure simply re-polls and the inbox/rank-guard make the replay idempotent. Safe
+ * because the read model is rebuildable from {@code earliest} and carries no money meaning.
  */
 @Component
 public class TransferStatusProjection {
@@ -32,61 +40,81 @@ public class TransferStatusProjection {
         this.repository = repository;
     }
 
-    @KafkaListener(topics = "transfer-requested", groupId = "gateway-projection-requested")
+    @KafkaListener(
+            topics = "transfer-requested",
+            groupId = "gateway-projection-requested",
+            containerFactory = "batchListenerContainerFactory")
     @Transactional
-    public void onTransferRequested(com.acme.bank.contracts.avro.TransferRequested event) {
-        String transferId = event.getTransferId().toString();
-        if (!inbox.firstTime(LISTENER_REQUESTED, transferId)) {
-            return;
+    public void onTransferRequested(List<com.acme.bank.contracts.avro.TransferRequested> events) {
+        for (com.acme.bank.contracts.avro.TransferRequested event : events) {
+            String transferId = event.getTransferId().toString();
+            if (!inbox.firstTime(LISTENER_REQUESTED, transferId)) {
+                continue;
+            }
+            Instant now = Instant.now();
+            MoneyAmount amount = MoneyAmount.from(MoneyMapper.fromAvro(event.getAmount()));
+            TransferView row = repository
+                    .findById(transferId)
+                    .orElseGet(() -> TransferView.seed(transferId, TransferStatus.REQUESTED, 0, now));
+            // Facts come only from TransferRequested; apply them even if a terminal event already created
+            // the row. REQUESTED is the lowest rank, so advanceTo won't regress an already-terminal row.
+            row.applyFacts(
+                    amount,
+                    event.getSourceAccountId().toString(),
+                    event.getDestinationAccountId().toString(),
+                    event.getRequestedAt());
+            row.advanceTo(TransferStatus.REQUESTED, null, now);
+            repository.save(row);
         }
-        Instant now = Instant.now();
-        MoneyAmount amount = MoneyAmount.from(MoneyMapper.fromAvro(event.getAmount()));
-        TransferView row = repository
-                .findById(transferId)
-                .orElseGet(() -> TransferView.seed(transferId, TransferStatus.REQUESTED, 0, now));
-        // Facts come only from TransferRequested; apply them even if a terminal event already created
-        // the row. REQUESTED is the lowest rank, so advanceTo won't regress an already-terminal row.
-        row.applyFacts(
-                amount,
-                event.getSourceAccountId().toString(),
-                event.getDestinationAccountId().toString(),
-                event.getRequestedAt());
-        row.advanceTo(TransferStatus.REQUESTED, null, now);
-        repository.save(row);
     }
 
-    @KafkaListener(topics = "transfer-screened", groupId = "gateway-projection-screened")
+    @KafkaListener(
+            topics = "transfer-screened",
+            groupId = "gateway-projection-screened",
+            containerFactory = "batchListenerContainerFactory")
     @Transactional
-    public void onTransferScreened(com.acme.bank.contracts.avro.TransferScreened event) {
-        String transferId = event.getTransferId().toString();
-        if (!inbox.firstTime(LISTENER_SCREENED, transferId)) {
-            return;
+    public void onTransferScreened(List<com.acme.bank.contracts.avro.TransferScreened> events) {
+        for (com.acme.bank.contracts.avro.TransferScreened event : events) {
+            String transferId = event.getTransferId().toString();
+            if (!inbox.firstTime(LISTENER_SCREENED, transferId)) {
+                continue;
+            }
+            TransferStatus next = event.getApproved() ? TransferStatus.APPROVED : TransferStatus.FAILED;
+            String reason = event.getApproved() || event.getReason() == null
+                    ? null
+                    : event.getReason().toString();
+            advance(transferId, next, reason);
         }
-        TransferStatus next = event.getApproved() ? TransferStatus.APPROVED : TransferStatus.FAILED;
-        String reason = event.getApproved() || event.getReason() == null
-                ? null
-                : event.getReason().toString();
-        advance(transferId, next, reason);
     }
 
-    @KafkaListener(topics = "transfer-completed", groupId = "gateway-projection-completed")
+    @KafkaListener(
+            topics = "transfer-completed",
+            groupId = "gateway-projection-completed",
+            containerFactory = "batchListenerContainerFactory")
     @Transactional
-    public void onTransferCompleted(com.acme.bank.contracts.avro.TransferCompleted event) {
-        String transferId = event.getTransferId().toString();
-        if (!inbox.firstTime(LISTENER_COMPLETED, transferId)) {
-            return;
+    public void onTransferCompleted(List<com.acme.bank.contracts.avro.TransferCompleted> events) {
+        for (com.acme.bank.contracts.avro.TransferCompleted event : events) {
+            String transferId = event.getTransferId().toString();
+            if (!inbox.firstTime(LISTENER_COMPLETED, transferId)) {
+                continue;
+            }
+            advance(transferId, TransferStatus.COMPLETED, null);
         }
-        advance(transferId, TransferStatus.COMPLETED, null);
     }
 
-    @KafkaListener(topics = "transfer-failed", groupId = "gateway-projection-failed")
+    @KafkaListener(
+            topics = "transfer-failed",
+            groupId = "gateway-projection-failed",
+            containerFactory = "batchListenerContainerFactory")
     @Transactional
-    public void onTransferFailed(com.acme.bank.contracts.avro.TransferFailed event) {
-        String transferId = event.getTransferId().toString();
-        if (!inbox.firstTime(LISTENER_FAILED, transferId)) {
-            return;
+    public void onTransferFailed(List<com.acme.bank.contracts.avro.TransferFailed> events) {
+        for (com.acme.bank.contracts.avro.TransferFailed event : events) {
+            String transferId = event.getTransferId().toString();
+            if (!inbox.firstTime(LISTENER_FAILED, transferId)) {
+                continue;
+            }
+            advance(transferId, TransferStatus.FAILED, event.getReason().toString());
         }
-        advance(transferId, TransferStatus.FAILED, event.getReason().toString());
     }
 
     /**
