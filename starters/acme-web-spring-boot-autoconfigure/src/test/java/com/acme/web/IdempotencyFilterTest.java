@@ -43,6 +43,52 @@ class IdempotencyFilterTest {
     }
 
     @Test
+    void doesNotCacheFourXxSoSubsequentRequestWithSameKeyReExecutes() throws Exception {
+        IdempotencyFilter filter = new IdempotencyFilter(new InMemoryIdempotencyStore());
+        AtomicInteger handlerInvocations = new AtomicInteger();
+
+        // first request: handler returns 400 (validation failure)
+        MockFilterChain badChain = new MockFilterChain() {
+            @Override
+            public void doFilter(jakarta.servlet.ServletRequest req, jakarta.servlet.ServletResponse res)
+                    throws java.io.IOException {
+                handlerInvocations.incrementAndGet();
+                HttpServletResponse http = (HttpServletResponse) res;
+                http.setStatus(400);
+                http.setContentType("application/json");
+                http.getWriter().write("{\"error\":\"invalid\"}");
+            }
+        };
+
+        MockHttpServletRequest first = post("key-bad");
+        MockHttpServletResponse firstResponse = new MockHttpServletResponse();
+        filter.doFilter(first, firstResponse, badChain);
+        assertThat(firstResponse.getStatus()).isEqualTo(400);
+
+        // second request with the SAME key: handler now returns 201 (client fixed its body)
+        MockFilterChain goodChain = new MockFilterChain() {
+            @Override
+            public void doFilter(jakarta.servlet.ServletRequest req, jakarta.servlet.ServletResponse res)
+                    throws java.io.IOException {
+                handlerInvocations.incrementAndGet();
+                HttpServletResponse http = (HttpServletResponse) res;
+                http.setStatus(201);
+                http.setContentType("application/json");
+                http.getWriter().write("{\"id\":\"t-42\"}");
+            }
+        };
+
+        MockHttpServletRequest second = post("key-bad");
+        MockHttpServletResponse secondResponse = new MockHttpServletResponse();
+        filter.doFilter(second, secondResponse, goodChain);
+
+        // handler must have been called twice (400 was not cached; second request re-executed)
+        assertThat(handlerInvocations.get()).isEqualTo(2);
+        assertThat(secondResponse.getStatus()).isEqualTo(201);
+        assertThat(secondResponse.getContentAsString()).contains("t-42");
+    }
+
+    @Test
     void passesThroughWhenNoKey() throws Exception {
         IdempotencyFilter filter = new IdempotencyFilter(new InMemoryIdempotencyStore());
         AtomicInteger invocations = new AtomicInteger();

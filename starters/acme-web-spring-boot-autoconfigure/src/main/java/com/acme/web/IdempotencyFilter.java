@@ -9,9 +9,19 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import org.springframework.web.util.ContentCachingResponseWrapper;
 
 /**
- * Replays a previously stored response when a request carries an {@code Idempotency-Key} already seen
- * (idempotent retries return the original result). Only applies to unsafe methods (POST/PATCH/PUT).
- * Responses with a 5xx status are not stored (transient failures should be retryable).
+ * Replays a previously stored response when a request carries an {@code Idempotency-Key} already seen,
+ * guarding against SEQUENTIAL retries of requests whose outcome was successful (2xx). Only applies to
+ * unsafe methods (POST/PATCH/PUT).
+ *
+ * <p>Only 2xx responses are cached: 4xx responses (e.g. validation failures) are intentionally NOT
+ * stored so that a client which fixes its request body can retry under the same key and succeed.
+ * 5xx responses are similarly not cached as the server-side failure may be transient.
+ *
+ * <p><b>Known limitation:</b> the in-memory store does not prevent concurrent first-requests from
+ * executing simultaneously. The idempotency guarantee covers only sequential retries — a concurrent
+ * duplicate that arrives before the first response is committed will proceed to execution. For
+ * distributed or concurrent-safe idempotency use a shared, atomic store (e.g. Redis with a
+ * compare-and-set).
  */
 public class IdempotencyFilter extends OncePerRequestFilter {
 
@@ -40,11 +50,12 @@ public class IdempotencyFilter extends OncePerRequestFilter {
 
         ContentCachingResponseWrapper wrapper = new ContentCachingResponseWrapper(response);
         chain.doFilter(request, wrapper);
-        if (wrapper.getStatus() < 500) {
+        int status = wrapper.getStatus();
+        if (status >= 200 && status < 300) {
             store.save(
                     key,
                     new IdempotencyStore.StoredResponse(
-                            wrapper.getStatus(), wrapper.getContentType(), wrapper.getContentAsByteArray()));
+                            status, wrapper.getContentType(), wrapper.getContentAsByteArray()));
         }
         wrapper.copyBodyToResponse();
     }
