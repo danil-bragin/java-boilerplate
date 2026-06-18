@@ -18,11 +18,20 @@ interface LedgerEntryJpaRepository extends JpaRepository<LedgerEntryJpaEntity, L
 
     List<LedgerEntryJpaEntity> findByTransferId(String transferId);
 
-    /** Sum of an account's entries strictly before {@code at} (page opening balance). */
+    /**
+     * Sum of an account's entries ordered strictly before {@code (at, id)} in the SAME total order the
+     * page uses {@code (postedAt asc, id asc)}. Passing the first row of a page as the {@code (at, id)}
+     * boundary makes the seed exclude exactly the rows shown on prior pages — even when many entries
+     * collide on a single {@code posted_at} — so the running balance stays correct across page borders.
+     */
     @Query("select coalesce(sum(e.amount.amount), 0) from LedgerEntryJpaEntity e "
-            + "where e.accountId = :accountId and e.amount.asset = :asset and e.postedAt < :at")
+            + "where e.accountId = :accountId and e.amount.asset = :asset "
+            + "and (e.postedAt < :at or (e.postedAt = :at and e.id < :id))")
     BigDecimal sumAmountBefore(
-            @Param("accountId") String accountId, @Param("asset") String asset, @Param("at") Instant at);
+            @Param("accountId") String accountId,
+            @Param("asset") String asset,
+            @Param("at") Instant at,
+            @Param("id") long id);
 
     /** A page of an account's entries within [from, to), oldest first. */
     @Query("select e from LedgerEntryJpaEntity e "

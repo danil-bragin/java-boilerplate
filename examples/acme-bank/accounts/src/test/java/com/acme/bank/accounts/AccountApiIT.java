@@ -14,6 +14,7 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
 
 @SpringBootTest(properties = "spring.kafka.listener.auto-startup=false")
@@ -26,6 +27,9 @@ class AccountApiIT {
 
     @Autowired
     ObjectMapper mapper;
+
+    @Autowired
+    JdbcTemplate jdbc;
 
     private static final String OPEN_100 =
             "{\"ownerName\":\"Ada\",\"asset\":\"USD\",\"initialDeposit\":{\"value\":\"100.00\",\"asset\":\"USD\"}}";
@@ -106,6 +110,43 @@ class AccountApiIT {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.value").value("0.00"))
                 .andExpect(jsonPath("$.asset").value("EUR"));
+    }
+
+    @Test
+    void statementRunningBalanceIsCorrectAcrossPages() throws Exception {
+        // 3 entries on one account that all collide on the SAME posted_at — the realistic case, since
+        // entries of one posting share a single Instant.now(). True cumulative balance is 60.00.
+        String acc = "stmt-" + System.nanoTime();
+        jdbc.update("INSERT INTO account(id, iban, status, asset) VALUES (?, ?, 'OPEN', 'USD')", acc, "IBAN-" + acc);
+        for (int i = 1; i <= 3; i++) {
+            jdbc.update(
+                    "INSERT INTO ledger_entry(id, transfer_id, account_id, amount, asset, posted_at) "
+                            + "VALUES (nextval('ledger_entry_seq'), ?, ?, ?, 'USD', "
+                            + "TIMESTAMP WITH TIME ZONE '2020-01-01 00:00:00+00')",
+                    "stmt-tx-" + i,
+                    acc,
+                    new java.math.BigDecimal("20.00"));
+        }
+
+        // Page 0 (size 2): running 20.00, 40.00
+        mvc.perform(get("/v1/accounts/{id}/statement", acc)
+                        .param("page", "0")
+                        .param("size", "2")
+                        .with(jwt()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.lines.length()").value(2))
+                .andExpect(jsonPath("$.lines[0].runningBalance").value("20.00"))
+                .andExpect(jsonPath("$.lines[1].runningBalance").value("40.00"));
+
+        // Page 1 (size 2): the running balance must CONTINUE from page 0, i.e. 60.00 — not reset to
+        // 20.00 because the same-timestamp prior page was dropped by a timestamp-only seed.
+        mvc.perform(get("/v1/accounts/{id}/statement", acc)
+                        .param("page", "1")
+                        .param("size", "2")
+                        .with(jwt()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.lines.length()").value(1))
+                .andExpect(jsonPath("$.lines[0].runningBalance").value("60.00"));
     }
 
     @Test

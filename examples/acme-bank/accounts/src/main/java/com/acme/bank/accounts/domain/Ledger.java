@@ -31,9 +31,13 @@ public interface Ledger {
      */
     List<PostedEntry> entriesFor(AccountId accountId, Instant from, Instant to, int page, int size);
 
-    /** SUM of this account's entries strictly before {@code at} — the opening balance for a page. */
-    Money balanceBefore(AccountId accountId, Instant at);
+    /**
+     * SUM of this account's entries ordered strictly before {@code (at, entryId)} in the page's total
+     * order {@code (postedAt asc, id asc)} — the opening balance for a page. The {@code entryId} tiebreak
+     * keeps the seed correct when several entries share a single {@code postedAt}.
+     */
+    Money balanceBefore(AccountId accountId, Instant at, long entryId);
 
-    /** A persisted ledger entry enriched with its posting time and counterparty. */
-    record PostedEntry(Instant postedAt, String transferId, String counterpartyAccountId, Money amount) {}
+    /** A persisted ledger entry enriched with its monotonic id, posting time and counterparty. */
+    record PostedEntry(long id, Instant postedAt, String transferId, String counterpartyAccountId, Money amount) {}
 }

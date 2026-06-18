@@ -41,6 +41,10 @@ class LedgerEntryJpaEntity {
         this.postedAt = postedAt;
     }
 
+    Long getId() {
+        return id;
+    }
+
     String getTransferId() {
         return transferId;
     }

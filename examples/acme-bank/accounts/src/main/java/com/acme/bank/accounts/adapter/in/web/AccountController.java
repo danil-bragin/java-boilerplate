@@ -103,9 +103,11 @@ public class AccountController {
 
         List<StatementLineView> lines = new ArrayList<>(entries.size());
         if (!entries.isEmpty()) {
-            // Running balance is correct across pages: seed from the SUM of all entries strictly
-            // before this page's first entry, then fold the page in order.
-            Money running = ledger.balanceBefore(accountId, entries.get(0).postedAt());
+            // Running balance is correct across pages: seed from the SUM of all entries ordered
+            // strictly before this page's first entry in the SAME total order the page uses
+            // (postedAt asc, id asc) — the id tiebreak handles entries that share a posted_at.
+            Ledger.PostedEntry first = entries.get(0);
+            Money running = ledger.balanceBefore(accountId, first.postedAt(), first.id());
             for (Ledger.PostedEntry e : entries) {
                 running = running.add(e.amount());
                 lines.add(new StatementLineView(

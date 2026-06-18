@@ -72,9 +72,9 @@ class JpaLedger implements Ledger {
     }
 
     @Override
-    public Money balanceBefore(AccountId accountId, Instant at) {
+    public Money balanceBefore(AccountId accountId, Instant at, long entryId) {
         Asset asset = accountAssetOf(accountId);
-        BigDecimal sum = entries.sumAmountBefore(accountId.value(), asset.code(), at);
+        BigDecimal sum = entries.sumAmountBefore(accountId.value(), asset.code(), at, entryId);
         return Money.of(sum.toPlainString(), asset);
     }
 
@@ -94,6 +94,7 @@ class JpaLedger implements Ledger {
         List<PostedEntry> result = new ArrayList<>(rows.size());
         for (LedgerEntryJpaEntity row : rows) {
             result.add(new PostedEntry(
+                    row.getId(),
                     row.getPostedAt(),
                     row.getTransferId(),
                     counterparties.get(row.getTransferId()),
