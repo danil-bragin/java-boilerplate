@@ -458,3 +458,109 @@ replicas behind the gateway **each multiply the corresponding number**. The dura
 **limiter per path** (write → Postgres CPU; read → gateway/accounts CPU; mixed → gateway CPU+RAM) and
 that **the saga is no longer a throughput bottleneck** — not the absolute QPS, which is a property of
 this host. See ADR-0028.
+
+---
+
+## 9. Write-throughput saturation (BANK-19): from ~550/s toward 2k — money-safe, no sharding
+
+> **Headline.** Tuning the infra and the per-transfer commit amplification — WITHOUT sharding and WITHOUT
+> weakening money durability — lifted the write-accept knee from the BANK-18 **~550 transfers/s** to a
+> **clean ~1,400 transfers/s** (PEAK 1400: 0 % error, p99 186 ms, saga lag ≈ 0), a **~2.5×** gain, with the
+> binding resource shifting **off Postgres onto gateway CPU**. The hard limiter to 2k on this box is now
+> **gateway CPU (3 cores maxed) + transfers RAM**, both gated by the **Docker VM allocation** — see §9.1.
+
+### 9.1 The Docker VM cap is the first-order, user-controlled limiter
+
+`docker info` on the bench host: **14 CPUs, 7.653 GiB total memory**. The physical Mac is **14 cores /
+48 GB**. So the CPU matches the host but **Docker Desktop allocates only ~7.65 GB of 48 GB RAM (~16 %)**.
+RAM is the tight, zero-sum resource: 5 service JVMs + 5 infra containers (~7.8 GB of `mem_limit`s) fill
+the VM, and every GB given to Postgres' `shared_buffers` is a GB taken from the JVMs. **Raising the Docker
+Desktop memory allocation (Settings → Resources, e.g. to 24–32 GB) is the #1 unlock the USER controls** and
+a prerequisite to going materially past ~1.4k/s — it would let transfers/gateway heaps grow, more service
+replicas fit, and Postgres take a bigger cache, all without fighting each other. On the **current** VM
+allocation, ~1.4k/s is the clean ceiling.
+
+### 9.2 Diagnosis — where the per-transfer Postgres CPU actually went (pg_stat_statements @ ~400/s)
+
+One transfer fans out to **~11 DB commits** across the saga (transfers POST + screening + posting +
+4 gateway-projection hops + notifications), with Spring-Modulith `event_publication` insert+complete
+(~5/transfer) and `processed_messages` inbox inserts (~9–10/transfer). The top costs by `total_exec_time`:
+
+1. **The antifraud velocity check — `SELECT count(*) FROM screening_decision WHERE source_account_id=? AND
+   approved` — was the #1 cost BY FAR: ~7× the next statement, mean 0.594 ms (20–30× slower than every
+   other query).** Root cause: `screening_decision` had **only a PK index on `transfer_id`**, so the count
+   **SEQ-SCANNED the whole table** every screen — cost growing with table size. (Also: the bench's 64-account
+   pool sending repeated `amount=1.00` trips the velocity rule, so ~99 % of bench transfers are *rejected* at
+   screening — the BANK-18 "Postgres-CPU-bound ~550/s" was dominated by this seq-scan on the **accept+screen**
+   hot path, not the money posting path, which barely ran.)
+2. **The ~11-commits/transfer fan-out** — each statement cheap (0.02–0.03 ms) but huge call counts:
+   `processed_messages` inserts, `event_publication` insert+complete, `transfer_view` updates.
+3. **fsync-per-commit × ~11 commits** — stock `commit_delay=0` (no group commit) pays a WAL fsync per commit.
+
+Stock Postgres config (the real gaps): `shared_buffers=128MB`, `max_wal_size=1GB` (forces checkpoint storms
+under write load), `wal_buffers=4MB`, `wal_compression=off`, `commit_delay=0`, Hikari pools at the Boot
+default of 10/service, trace sampling at **100 %** (≈15 spans/transfer to OTLP — observability at 60–100 % CPU).
+
+### 9.3 The money-safe tuning levers and their measured effect
+
+| Lever | Change | Effect |
+|---|---|---|
+| **Index the velocity seq-scan** | partial index `screening_decision(source_account_id) WHERE approved` | The #1 cost → **Index-Only Scan**; dropped out of the top-8 statements entirely. **~Halved Postgres CPU at 700/s (≈3.5 → ≈1.5 cores).** |
+| **Postgres for the hardware** | `shared_buffers` 128→256 MB, `max_wal_size` 1→4 GB, `wal_buffers` 4→64 MB, `wal_compression on`, `checkpoint_completion_target 0.9` | No checkpoint storms across the whole sweep (`checkpoints_timed=0`, `req=2`). |
+| **Group commit (money-safe fsync batch)** | `commit_delay=80µs`, `commit_siblings=5` | Batches WAL fsyncs across concurrent commits **without** lowering `synchronous_commit` — money stays durable. Attacks the ~11-fsync/transfer cost. |
+| **Redpanda cores** | `--smp` 1→2, `--memory` 1→1.5 G | The saga relay was ~55 % of 1 core at the old knee; at 2 cores it held ≤ 85 % up to 1400/s — saga lag stayed ≈ 0. |
+| **Hikari pools** | hot path (transfers/accounts/gateway) 10→24, others →16 (Σ=104 ≤ `max_connections=200`) | Lets the 6 saga lanes + POST drive the tuned Postgres concurrently. |
+| **Batch the NON-money hops** | antifraud screening + the 4 gateway-projection listeners → batch listeners | N records per poll commit once; amortized commit/fsync on the idempotent hops. The accounts POSTING consumer is **NOT** batched (per-posting tx + BANK-11 lock + Σ=0). |
+| **Per-DB `synchronous_commit=off` — gateway ONLY** | gateway datasource `connection-init-sql: SET synchronous_commit TO off` | Removes the rebuildable `transfer_view` projection's fsync from the hot path. Safe: the read model holds no money/invariants and re-consumes from `earliest` on loss. **Money DBs (accounts/transfers/antifraud/notifications) keep `synchronous_commit=on`.** |
+| **Trace sampling 1.0 → 0.1** + observability `mem_limit` 1280→768 m | removes ~15 spans/transfer of OTLP export | observability CPU 60–100 % → ~8–30 %; freed RAM funded Postgres/Redpanda within the VM. |
+
+### 9.4 Re-bench: the new write knee (open-model ramp, bench overrides, this host)
+
+| PEAK offered (req/s) | sustained mean (req/s) | p99 | err % | saga lag | binding resource |
+|---|---|---|---|---|---|
+| 700  | 584  | 274 ms | 0 % | ≈ 0 | gateway CPU ~2.1 cores; **Postgres only ~1.5 cores** (was ~3.5 at BANK-18) |
+| 1000 | 839  | 204 ms | 0 % | ≈ 0 | gateway CPU ~2.8 cores |
+| **1400** | **1,160** | **186 ms** | **0 %** | **≈ 0** | **gateway CPU ~3.0 cores (clean knee)** |
+| 1800 | 1,480 | ~1,800 ms | 0 % (but 6.7 % > 1.2 s) | accounts/transfers ≈ 0, projection lag rising | **gateway CPU saturated (3.1 cores) — PAST the knee** |
+
+- **Max clean write-ACCEPT QPS ≈ 1,400/s** (p99 186 ms, 0 % error, saga lag ≈ 0), **up from ~550/s — a ~2.5×
+  gain.** Past ~1.4k the gateway CPU saturates and p99 collapses (1,800 still returns 0 hard errors — the
+  open-model just queues — but 6.7 % of responses exceed 1.2 s, so it is past the usable knee).
+- **Sustainable saga (lag-bounded) QPS = the accept rate.** `rpk group describe accounts transfers` held
+  **lag ≈ 0** at every rate through 1800/s offered — the 6-partition saga still drains in real time; the only
+  group that began to lag at 1800 was the rebuildable **gateway projection** (lag ~88), which is not money.
+- **The saturating resource MOVED.** BANK-18 was **Postgres CPU** (~3.5 cores at 700/s). After indexing the
+  seq-scan + the tuning, **Postgres sits at ~1.5 cores even at 1800/s offered**; the new ceiling is **gateway
+  CPU (3 cores maxed)** with **transfers at its 768 m RAM `mem_limit`** as the co-limiter.
+
+### 9.5 Honest distance to 2k and the hard limiter
+
+We reached **~1,400/s clean (~70 % of the 2k target)** on the current box; **2k was NOT reached, and we do
+not claim it.** The hard limiter is now **gateway CPU (3 of the VM's 14 cores, fully saturated) plus the
+transfers JVM at its RAM `mem_limit`** — both **gated by the 7.65 GiB Docker VM allocation**, which is
+zero-sum across the JVMs. To go from ~1.4k toward 2k on this hardware, in priority order: **(1) raise the
+Docker Desktop RAM allocation** (§9.1) so heaps and replicas fit; **(2) run gateway replicas** behind the
+edge (the gateway accept/proxy hop is the binding CPU and scales horizontally — it is stateless); **(3) give
+transfers more heap/CPU**. None of these is sharding and none weakens money durability — they are capacity,
+not correctness. Postgres is **no longer** the write limiter on this host.
+
+### 9.6 Money-safety — intact (the whole point)
+
+- `synchronous_commit=on` verified for the money/record DBs (accounts, transfers, antifraud, notifications);
+  `off` **only** for the rebuildable gateway `transfer_view` projection (per-connection, documented safe).
+- The fsync cost on the money path was cut by **group commit** (`commit_delay`) — durability unchanged — **not**
+  by lowering `synchronous_commit` or `acks` (`acks=all` + idempotent producer retained).
+- Batch listeners are on the **idempotent NON-money hops only** (screening, projection). The accounts POSTING
+  consumer stays per-posting transaction + the BANK-11 source lock + Σ=0 — never batched.
+- **Money-safety + saga ITs all green** after the tuning: `ConcurrentDebitIT` (overdraft gate), `PostTransferIT`,
+  `ScreeningIT`, `TransferAdvanceIT`, `NotificationIT`, gateway `TransferProjectionIT`. **No sharding.**
+- A real bug surfaced by batching and fixed: `JdbcInbox` caught `DuplicateKeyException` for dedup, but on
+  Postgres a constraint violation aborts the **whole** transaction (SQLSTATE 25P02) — under a batch tx a
+  duplicate poisoned every other record. Replaced with a conflict-ignoring upsert (`ON CONFLICT DO NOTHING` /
+  Oracle `MERGE`) that reports rows-inserted and never poisons the tx. Idempotency semantics unchanged.
+
+### 9.7 Co-located caveat (unchanged)
+
+Still **one host**, now 14 vCPU / **7.65 GiB** shared across 5 service JVMs + 5 infra + Gatling. The write
+ceiling is **gateway CPU + transfers RAM** (no longer Postgres); raising the VM RAM and adding gateway
+replicas each lift it. See ADR-0029.
