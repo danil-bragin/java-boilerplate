@@ -13,10 +13,18 @@ name: acme-bank-local
 services:
   postgres:
     image: postgres:16-alpine
-    # Infra mem_limits (BANK-18 OOM fix) cap the non-JVM footprint so the five service JVMs + the
-    # co-located Gatling driver fit the ~8GB host. Postgres uses shared_buffers + page cache; 512m is
-    # ample for the example's one-DB-per-service workload.
-    mem_limit: 512m
+    # BANK-19b: raised 512m -> 768m to fund the tuned shared_buffers (256MB) + WAL buffers (64MB) +
+    # per-connection work_mem without starving the page cache. Rebalanced against the JVMs by trimming
+    # observability 1280m -> 1024m (off the money path) so the stack still fits the ~7.65 GiB Docker VM.
+    # NOTE: the VM RAM (7.65 GiB of a 48 GB host) is the gating constraint — see BENCHMARKS.md §9 / ADR-0029.
+    mem_limit: 768m
+    # BANK-19b: mount the hardware-tuned config (shared_buffers/WAL/checkpoint + GROUP COMMIT for
+    # money-safe fsync batching; synchronous_commit stays `on` for money). `-c config_file=` layers it
+    # over the image's postgresql.conf. pg_stat_statements is preloaded for the re-bench/diagnosis.
+    command:
+      - postgres
+      - -c
+      - config_file=/etc/postgresql/postgresql.tuning.conf
     environment:
       POSTGRES_DB: bank
       POSTGRES_USER: acme
@@ -24,6 +32,8 @@ services:
     volumes:
       # Creates one database per service on first start (gateway/transfers/accounts/...).
       - ./db/init-multidb.sh:/docker-entrypoint-initdb.d/init-multidb.sh:ro
+      # BANK-19b hardware-tuned config (money-safe: synchronous_commit=on, group commit for fsync batching).
+      - ./db/postgresql.tuning.conf:/etc/postgresql/postgresql.tuning.conf:ro
     ports: ["5432:5432"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U acme"]
@@ -33,15 +43,18 @@ services:
 
   redpanda:
     image: redpandadata/redpanda:v24.2.7
-    # Redpanda is already told `--memory=1G --reserve-memory=0M`; cap the container a touch above that
-    # to bound the seastar allocator + overhead.
-    mem_limit: 1280m
+    # BANK-19b: the saga relay carries ~5 produced + ~10 consumed msgs/transfer; at the BANK-18 knee
+    # Redpanda's single core (--smp=1) was ~55% and climbing — the next ceiling on the saga drain after
+    # Postgres. Give it 2 cores (--smp=2) + 1.5G so two reactor lanes share the broker work. mem_limit
+    # bumped 1280m -> 1664m to bound seastar's allocator at the larger --memory; within the VM budget
+    # (funded by trimming observability — see below).
+    mem_limit: 1664m
     command:
       - redpanda
       - start
       - --overprovisioned
-      - --smp=1
-      - --memory=1G
+      - --smp=2
+      - --memory=1536M
       - --reserve-memory=0M
       - --node-id=0
       - --kafka-addr=PLAINTEXT://0.0.0.0:9092
@@ -68,7 +81,10 @@ services:
   keycloak:
     image: quay.io/keycloak/keycloak:26.0
     # Keycloak runs its own JVM; cap it so dev-mode heap growth can't eat the service budget.
-    mem_limit: 640m
+    # BANK-19b: trimmed 640m -> 512m — Keycloak only mints tokens at bench start (the diagnosis saw it at
+    # ~0.16% CPU during steady load), so its idle heap is reclaimed to keep the stack within the ~7.65 GiB
+    # Docker VM after the Postgres/Redpanda increases.
+    mem_limit: 512m
     command: ["start-dev", "--import-realm"]
     environment:
       KEYCLOAK_ADMIN: admin
@@ -99,9 +115,12 @@ services:
 
   observability:
     image: grafana/otel-lgtm:latest
-    # otel-lgtm bundles Grafana+Loki+Tempo+Mimir+Prometheus — the heaviest infra container. Cap it so
-    # a trace/metric backlog can't starve the services.
-    mem_limit: 1280m
+    # otel-lgtm bundles Grafana+Loki+Tempo+Mimir+Prometheus — the heaviest infra container.
+    # BANK-19b: trimmed 1280m -> 768m to fund the Postgres (+256m) and Redpanda (+384m) increases within
+    # the ~7.65 GiB Docker VM. Observability is OFF the money path — a trace/metric backlog there must
+    # never starve the services. Paired with trace sampling lowered 1.0 -> 0.1 in the service yamls, which
+    # also cuts the OTLP export load the diagnosis saw at ~60-100% CPU on this container.
+    mem_limit: 768m
     ports:
       - "3000:3000"   # Grafana
       - "4317:4317"   # OTLP gRPC
