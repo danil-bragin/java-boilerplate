@@ -58,12 +58,12 @@ public class Transfer {
     }
 
     public void approve() {
-        requireStatus(TransferStatus.REQUESTED, TransferStatus.SCREENING);
+        requireStatus(TransferStatus.REQUESTED);
         this.status = TransferStatus.APPROVED;
     }
 
     public void reject(String reason) {
-        requireStatus(TransferStatus.REQUESTED, TransferStatus.SCREENING);
+        requireStatus(TransferStatus.REQUESTED);
         this.status = TransferStatus.FAILED;
         this.failureReason = reason;
     }
