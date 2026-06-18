@@ -1,6 +1,10 @@
 spring:
   application:
     name: antifraud
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/antifraud}
+    username: ${SPRING_DATASOURCE_USERNAME:acme}
+    password: ${SPRING_DATASOURCE_PASSWORD:acme}
   jpa:
     hibernate:
       ddl-auto: validate
@@ -8,6 +12,7 @@ spring:
   flyway:
     locations: classpath:db/migration/{vendor}
   kafka:
+    bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     consumer:
       group-id: antifraud
       auto-offset-reset: earliest
@@ -18,7 +23,30 @@ spring:
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: io.confluent.kafka.serializers.KafkaAvroSerializer
+    properties:
+      schema.registry.url: ${SCHEMA_REGISTRY_URL:http://localhost:8081}
   modulith:
     events:
       kafka:
         enable-json: false
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  health:
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true
+  tracing:
+    sampling:
+      probability: 1.0
+  otlp:
+    tracing:
+      endpoint: ${OTEL_OTLP_TRACES_ENDPOINT:http://localhost:4318/v1/traces}

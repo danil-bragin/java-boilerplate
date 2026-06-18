@@ -1,4 +1,11 @@
 spring:
+  # acme-test-support puts spring-data-redis on the TEST classpath; without this exclusion Spring
+  # would create a StringRedisTemplate and acme-web would select RedisIdempotencyStore, which then
+  # fails to reach a (non-existent) Redis. Production runtime has no Redis here → in-memory store.
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.redis.RedisRepositoriesAutoConfiguration
   flyway:
     locations: classpath:db/migration/postgresql
   kafka:

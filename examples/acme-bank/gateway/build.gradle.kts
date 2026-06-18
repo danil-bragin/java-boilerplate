@@ -14,6 +14,9 @@ dependencies {
     implementation(project(":starters:acme-security-spring-boot-starter"))
     implementation(project(":starters:acme-observability-spring-boot-starter"))
     implementation(project(":examples:acme-bank:bank-contracts"))
+    // Shared idempotency across gateway replicas: when SPRING_DATA_REDIS_HOST is set (compose),
+    // acme-web's RedisIdempotencyStore activates. Local/test default (no Redis) → in-memory store.
+    implementation(libs.spring.boot.starter.data.redis)
     implementation(libs.spring.boot.starter.web)
     implementation(libs.spring.boot.starter.validation)
     implementation(libs.resilience4j.spring.boot3)

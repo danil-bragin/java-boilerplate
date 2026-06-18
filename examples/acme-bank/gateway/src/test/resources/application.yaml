@@ -1,4 +1,11 @@
 spring:
+  # No Redis in tests: keep the in-memory idempotency store (the Redis store activates only in
+  # compose where SPRING_DATA_REDIS_HOST points at a real Redis). Excluding the auto-config stops
+  # Spring from creating a StringRedisTemplate that would otherwise select RedisIdempotencyStore.
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.redis.RedisRepositoriesAutoConfiguration
   flyway:
     locations: classpath:db/migration/postgresql
   kafka:
