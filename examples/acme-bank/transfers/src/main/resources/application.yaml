@@ -85,6 +85,12 @@ bucket4j:
 
 acme:
   bank:
+    topics:
+      posting-requested:
+        # BANK-15: spread source accounts across partitions so each account is a single writer on
+        # one partition/consumer (per-account write parallelism). Fixed at first create — the example
+        # deploys fresh. Production sets replication at the broker; dev/Redpanda is single-broker.
+        partitions: ${POSTING_REQUESTED_PARTITIONS:6}
     reconciler:
       # The money-safe stuck-saga reconciler: re-drive pre-money states, reconcile POSTING against
       # the accounts ledger. A POSTING transfer is NEVER auto-failed — only accounts terminalizes money.
