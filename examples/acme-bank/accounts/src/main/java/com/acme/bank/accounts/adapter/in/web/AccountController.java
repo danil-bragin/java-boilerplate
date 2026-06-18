@@ -96,10 +96,13 @@ public class AccountController {
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "50") int size) {
         load(id); // 404 if unknown
+        // Clamp paging to bound the PageRequest (DoS guard against e.g. size=100000000).
+        int safePage = Math.max(page, 0);
+        int safeSize = Math.min(Math.max(size, 1), 200);
         AccountId accountId = new AccountId(id);
         Instant from = Instant.EPOCH;
         Instant to = Instant.now().plusSeconds(1);
-        List<Ledger.PostedEntry> entries = ledger.entriesFor(accountId, from, to, page, size);
+        List<Ledger.PostedEntry> entries = ledger.entriesFor(accountId, from, to, safePage, safeSize);
 
         List<StatementLineView> lines = new ArrayList<>(entries.size());
         if (!entries.isEmpty()) {
@@ -114,7 +117,7 @@ public class AccountController {
                         e.postedAt().toString(), e.counterpartyAccountId(), scaled(e.amount()), scaled(running)));
             }
         }
-        return new StatementView(id, page, size, lines);
+        return new StatementView(id, safePage, safeSize, lines);
     }
 
     @PostMapping("/{id}/freeze")

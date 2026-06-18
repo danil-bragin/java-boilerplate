@@ -53,10 +53,13 @@ public class TransferController {
             @RequestParam(required = false) TransferStatus status,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "50") int size) {
-        List<TransferView> views = listTransfers.handle(accountId, status, page, size).stream()
+        // Clamp paging to bound the PageRequest (DoS guard against e.g. size=100000000).
+        int safePage = Math.max(page, 0);
+        int safeSize = Math.min(Math.max(size, 1), 200);
+        List<TransferView> views = listTransfers.handle(accountId, status, safePage, safeSize).stream()
                 .map(TransferView::of)
                 .toList();
-        return Map.of("transfers", views, "page", page, "size", size);
+        return Map.of("transfers", views, "page", safePage, "size", safeSize);
     }
 
     @GetMapping("/{id}")

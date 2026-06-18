@@ -150,6 +150,17 @@ class AccountApiIT {
     }
 
     @Test
+    void statementClampsHugePageSize() throws Exception {
+        String id = openAccount();
+        // A hostile size must be clamped to the 200 cap (no giant PageRequest).
+        mvc.perform(get("/v1/accounts/{id}/statement", id)
+                        .param("size", "100000")
+                        .with(jwt()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.size").value(200));
+    }
+
+    @Test
     void freezesAccount() throws Exception {
         String id = openAccount();
         mvc.perform(post("/v1/accounts/{id}/freeze", id).with(jwt())).andExpect(status().isOk());

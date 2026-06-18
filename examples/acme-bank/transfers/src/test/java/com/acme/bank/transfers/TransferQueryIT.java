@@ -92,6 +92,14 @@ class TransferQueryIT {
     }
 
     @Test
+    void listClampsHugePageSize() throws Exception {
+        // A hostile size must be clamped to the 200 cap (no giant PageRequest).
+        mvc.perform(get("/v1/transfers").param("size", "100000").with(jwt()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.size").value(200));
+    }
+
+    @Test
     void honoursPaging() throws Exception {
         mvc.perform(get("/v1/transfers")
                         .param("accountId", "acc-X")
