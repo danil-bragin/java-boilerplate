@@ -88,8 +88,11 @@ acme:
     topics:
       posting-requested:
         # BANK-15: spread source accounts across partitions so each account is a single writer on
-        # one partition/consumer (per-account write parallelism). Fixed at first create — the example
-        # deploys fresh. Production sets replication at the broker; dev/Redpanda is single-broker.
+        # one partition/consumer (per-account write parallelism). Each service with the NewTopic bean
+        # (transfers + accounts) provisions/grows the topic to this count at startup; the example deploys
+        # fresh so it's a one-time create. Growing partitions on a live keyed topic remaps keys — do it
+        # only on a drained topic in production. Production sets replication at the broker; dev/Redpanda
+        # is single-broker.
         partitions: ${POSTING_REQUESTED_PARTITIONS:6}
     reconciler:
       # The money-safe stuck-saga reconciler: re-drive pre-money states, reconcile POSTING against

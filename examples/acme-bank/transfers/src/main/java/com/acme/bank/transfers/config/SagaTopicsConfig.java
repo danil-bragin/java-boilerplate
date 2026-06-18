@@ -17,10 +17,13 @@ import org.springframework.kafka.config.TopicBuilder;
  * across partitions and are consumed in parallel. Partition count comes from
  * {@code acme.bank.topics.posting-requested.partitions} (default 6).
  *
- * <p>NOTE: increasing partitions on an EXISTING keyed topic re-maps keys (a given account could move
- * to a different partition), so the partition count is fixed at FIRST create. The example deploys
- * fresh ({@code docker compose down -v} drops the broker volume), so this is clean. Replication is 1
- * for the single-broker dev/Redpanda broker; PRODUCTION sets a higher replication factor at the
+ * <p>NOTE: each service with this {@link NewTopic} bean (transfers AND accounts) provisions/grows the
+ * topic to the declared partition count at startup — {@code KafkaAdmin} GROWS an existing topic to the
+ * declared count on context refresh. Increasing partitions on an EXISTING keyed topic re-maps keys (a
+ * given account could move to a different partition, briefly disturbing the single-writer property
+ * mid-flight), so it should only be done on a DRAINED topic in production. The example deploys fresh
+ * ({@code docker compose down -v} drops the broker volume), so this is a one-time create. Replication
+ * is 1 for the single-broker dev/Redpanda broker; PRODUCTION sets a higher replication factor at the
  * broker / topic-provisioning layer.
  */
 @Configuration
