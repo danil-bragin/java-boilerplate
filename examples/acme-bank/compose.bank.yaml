@@ -14,10 +14,12 @@ services:
   postgres:
     image: postgres:16-alpine
     # BANK-19b: raised 512m -> 768m to fund the tuned shared_buffers (256MB) + WAL buffers (64MB) +
-    # per-connection work_mem without starving the page cache. Rebalanced against the JVMs by trimming
-    # observability 1280m -> 1024m (off the money path) so the stack still fits the ~7.65 GiB Docker VM.
-    # NOTE: the VM RAM (7.65 GiB of a 48 GB host) is the gating constraint — see BENCHMARKS.md §9 / ADR-0029.
-    mem_limit: 768m
+    # per-connection work_mem without starving the page cache. NOTE: the VM RAM was the gating constraint.
+    # BANK-20: the user raised the Docker VM to ~24 GiB, removing the RAM starvation that gated BANK-19b.
+    # Postgres mem_limit 768m -> 5g funds shared_buffers 256MB -> 3GB (see postgresql.tuning.conf) + the
+    # larger backend-process count from the 3 gateway replicas' pools (max_connections 200 -> 300), with
+    # the page cache no longer starved. WAL/checkpoint/group-commit + synchronous_commit=on unchanged.
+    mem_limit: 5g
     # BANK-19b: mount the hardware-tuned config (shared_buffers/WAL/checkpoint + GROUP COMMIT for
     # money-safe fsync batching; synchronous_commit stays `on` for money). `-c config_file=` layers it
     # over the image's postgresql.conf. pg_stat_statements is preloaded for the re-bench/diagnosis.
@@ -52,16 +54,18 @@ services:
     image: redpandadata/redpanda:v24.2.7
     # BANK-19b: the saga relay carries ~5 produced + ~10 consumed msgs/transfer; at the BANK-18 knee
     # Redpanda's single core (--smp=1) was ~55% and climbing — the next ceiling on the saga drain after
-    # Postgres. Give it 2 cores (--smp=2) + 1.5G so two reactor lanes share the broker work. mem_limit
-    # bumped 1280m -> 1664m to bound seastar's allocator at the larger --memory; within the VM budget
-    # (funded by trimming observability — see below).
-    mem_limit: 1664m
+    # Postgres. BANK-19b gave it 2 cores (--smp=2) + 1.5G.
+    # BANK-20: with the gateway scaled out and the write target raised toward 2k, the saga relay throughput
+    # is the next likely ceiling. On the 24 GiB VM give it 4 reactor cores (--smp 2 -> 4) + 4G memory so the
+    # broker keeps the 6-partition saga drain lag-bounded at the higher accept rate. mem_limit 1664m -> 4608m
+    # bounds seastar's allocator at the larger --memory with headroom.
+    mem_limit: 4608m
     command:
       - redpanda
       - start
       - --overprovisioned
-      - --smp=2
-      - --memory=1536M
+      - --smp=4
+      - --memory=4G
       - --reserve-memory=0M
       - --node-id=0
       - --kafka-addr=PLAINTEXT://0.0.0.0:9092
@@ -123,11 +127,10 @@ services:
   observability:
     image: grafana/otel-lgtm:latest
     # otel-lgtm bundles Grafana+Loki+Tempo+Mimir+Prometheus — the heaviest infra container.
-    # BANK-19b: trimmed 1280m -> 768m to fund the Postgres (+256m) and Redpanda (+384m) increases within
-    # the ~7.65 GiB Docker VM. Observability is OFF the money path — a trace/metric backlog there must
-    # never starve the services. Paired with trace sampling lowered 1.0 -> 0.1 in the service yamls, which
-    # also cuts the OTLP export load the diagnosis saw at ~60-100% CPU on this container.
-    mem_limit: 768m
+    # BANK-19b: trimmed 1280m -> 768m to fund the Postgres/Redpanda increases within the ~7.65 GiB VM.
+    # BANK-20: with the VM at ~24 GiB it's no longer zero-sum; restored 768m -> 1024m so the trace/metric
+    # backlog from the higher write rate doesn't get reclaimed. Still OFF the money path; sampling 0.1.
+    mem_limit: 1024m
     ports:
       - "3000:3000"   # Grafana
       - "4317:4317"   # OTLP gRPC
@@ -214,11 +217,14 @@ services:
   transfers:
     build:
       context: ./transfers
-    mem_limit: 768m
+    # BANK-20: transfers was the RAM co-limiter at the BANK-19b knee (768m mem_limit -> ~576m heap). On the
+    # 24 GiB VM raise it to 2g so the transfers JVM heap (-> ~1.5g) isn't the co-ceiling once gateway CPU is
+    # relieved by the replicas. It is the first downstream the scaled-out edge pushes harder.
+    mem_limit: 2g
     deploy:
       resources:
         limits:
-          memory: 768m
+          memory: 2g
     depends_on:
       postgres: {condition: service_healthy}
       redpanda: {condition: service_healthy}
@@ -241,11 +247,14 @@ services:
   accounts:
     build:
       context: ./accounts
-    mem_limit: 768m
+    # BANK-20: accounts holds the money-posting path (BANK-11 source lock, Σ=0, per-posting tx — unchanged).
+    # 768m -> 2g on the 24 GiB VM so the posting consumer has heap headroom as the higher accept rate drives
+    # more saga completions through it. Money semantics untouched — this is capacity, not correctness.
+    mem_limit: 2g
     deploy:
       resources:
         limits:
-          memory: 768m
+          memory: 2g
     depends_on:
       postgres: {condition: service_healthy}
       redpanda: {condition: service_healthy}
