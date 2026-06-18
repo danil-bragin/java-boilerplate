@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.acme.test.PostgresTestcontainersConfiguration;
 import com.acme.test.RedpandaTestcontainersConfiguration;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
@@ -54,6 +55,9 @@ class DltRoutingIT {
     @Autowired
     RedpandaContainer redpandaContainer;
 
+    @Autowired
+    MeterRegistry meterRegistry;
+
     @Test
     void poisonRecordIsRoutedToDeadLetterTopic() throws Exception {
         // RedpandaContainer.getBootstrapServers() returns "PLAINTEXT://host:port"; strip the prefix.
@@ -78,6 +82,19 @@ class DltRoutingIT {
                 assertThat(found).as("poison record routed to orders-dlt").isTrue();
             });
         }
+
+        // The DLT routing also increments the acme.saga.dlt counter (tagged by source topic) for
+        // alerting on poisoned events.
+        Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            io.micrometer.core.instrument.Counter counter =
+                    meterRegistry.find("acme.saga.dlt").tag("topic", "orders").counter();
+            assertThat(counter)
+                    .as("acme.saga.dlt counter registered for topic=orders")
+                    .isNotNull();
+            assertThat(counter.count())
+                    .as("acme.saga.dlt counter for topic=orders")
+                    .isGreaterThanOrEqualTo(1.0);
+        });
     }
 
     private static Producer<String, String> newProducer(String bootstrap) {

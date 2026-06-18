@@ -2,9 +2,14 @@ package com.acme.messaging.autoconfigure;
 
 import com.acme.messaging.Inbox;
 import com.acme.messaging.JdbcInbox;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.util.Map;
 import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.serialization.StringSerializer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
@@ -28,6 +33,11 @@ import org.springframework.util.backoff.FixedBackOff;
 @ConditionalOnClass(JdbcTemplate.class)
 public class MessagingAutoConfiguration {
 
+    private static final Logger log = LoggerFactory.getLogger(MessagingAutoConfiguration.class);
+
+    /** Counter incremented once per record routed to a dead-letter topic, tagged by source topic. */
+    static final String DLT_COUNTER = "acme.saga.dlt";
+
     @Bean
     @ConditionalOnBean(JdbcTemplate.class)
     @ConditionalOnMissingBean
@@ -48,7 +58,8 @@ public class MessagingAutoConfiguration {
     @Bean
     @ConditionalOnBean(ProducerFactory.class)
     @ConditionalOnMissingBean
-    public DefaultErrorHandler kafkaErrorHandler(ProducerFactory<Object, Object> producerFactory) {
+    public DefaultErrorHandler kafkaErrorHandler(
+            ProducerFactory<Object, Object> producerFactory, ObjectProvider<MeterRegistry> meterRegistry) {
         // Derive a DLT producer factory from the auto-configured one (inheriting bootstrap.servers,
         // security, etc.) but override serializers to String so String-valued consumer records can
         // be re-published without a ByteArraySerializer type mismatch. The raw cast is safe because
@@ -59,7 +70,28 @@ public class MessagingAutoConfiguration {
                         ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class,
                         ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class));
         KafkaTemplate<String, String> dltTemplate = new KafkaTemplate<>(dltFactory);
-        return new DefaultErrorHandler(new DeadLetterPublishingRecoverer(dltTemplate), new FixedBackOff(200L, 2L));
+
+        // Custom destination resolver: this is exactly where the <topic>-dlt target is computed, so
+        // it's the natural seam to surface a poisoned message for alerting (the reconciler handles
+        // silent hangs; this metric handles poison). Increment acme.saga.dlt (tagged by the source
+        // topic) and WARN, then resolve to the default "<topic>-dlt" partition.
+        MeterRegistry registry = meterRegistry.getIfAvailable();
+        DeadLetterPublishingRecoverer recoverer =
+                new DeadLetterPublishingRecoverer(dltTemplate, (record, exception) -> {
+                    String topic = record.topic();
+                    if (registry != null) {
+                        registry.counter(DLT_COUNTER, "topic", topic).increment();
+                    }
+                    log.warn(
+                            "routing poison record to DLT: topic={} partition={} offset={} cause={}",
+                            topic,
+                            record.partition(),
+                            record.offset(),
+                            exception.toString());
+                    // Spring Kafka's default destination: same partition on "<topic>-dlt".
+                    return new TopicPartition(topic + "-dlt", record.partition());
+                });
+        return new DefaultErrorHandler(recoverer, new FixedBackOff(200L, 2L));
     }
 
     /**
