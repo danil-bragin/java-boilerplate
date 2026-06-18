@@ -99,11 +99,16 @@ gateway:
     base-url: ${ACCOUNTS_BASE_URL:http://localhost:8083}
 
 resilience4j:
+  # BANK-18: the breaker thresholds are bound to env with the CURRENT (prod-safe) values as defaults,
+  # so a capacity-measurement run can relax them (compose.bench.yaml) WITHOUT changing the deployed
+  # default. `compose config` without the bench override still resolves these to today's values.
   circuitbreaker:
     instances:
       transfers:
         sliding-window-size: 10
-        failure-rate-threshold: 50
+        failure-rate-threshold: ${TRANSFERS_CB_FAILURE_RATE_THRESHOLD:50}
+        slow-call-rate-threshold: ${TRANSFERS_CB_SLOW_CALL_RATE_THRESHOLD:100}
+        slow-call-duration-threshold: ${TRANSFERS_CB_SLOW_CALL_DURATION_THRESHOLD:60s}
         wait-duration-in-open-state: 5s
         permitted-number-of-calls-in-half-open-state: 3
         # A downstream 4xx is a client error, not a transfers-side fault: it must not count toward
@@ -112,7 +117,9 @@ resilience4j:
           - org.springframework.web.client.HttpClientErrorException
       accounts:
         sliding-window-size: 10
-        failure-rate-threshold: 50
+        failure-rate-threshold: ${ACCOUNTS_CB_FAILURE_RATE_THRESHOLD:50}
+        slow-call-rate-threshold: ${ACCOUNTS_CB_SLOW_CALL_RATE_THRESHOLD:100}
+        slow-call-duration-threshold: ${ACCOUNTS_CB_SLOW_CALL_DURATION_THRESHOLD:60s}
         wait-duration-in-open-state: 5s
         permitted-number-of-calls-in-half-open-state: 3
         # A downstream 4xx is a client error, not an accounts-side fault: it must propagate as the
@@ -122,14 +129,16 @@ resilience4j:
   retry:
     instances:
       transfers:
-        max-attempts: 3
+        # BANK-18: max-attempts is env-bound (default 3 — unchanged). Bench sets it to 1 so retry
+        # amplification doesn't inflate offered load on the downstream during a capacity sweep.
+        max-attempts: ${TRANSFERS_RETRY_MAX_ATTEMPTS:3}
         wait-duration: 200ms
         # Never retry a downstream 4xx — the request is deterministically rejected; retrying wastes
         # calls and (pre-fix) masked the 4xx as a 503 once retries were exhausted.
         ignore-exceptions:
           - org.springframework.web.client.HttpClientErrorException
       accounts:
-        max-attempts: 3
+        max-attempts: ${ACCOUNTS_RETRY_MAX_ATTEMPTS:3}
         wait-duration: 200ms
         ignore-exceptions:
           - org.springframework.web.client.HttpClientErrorException
@@ -153,7 +162,12 @@ bucket4j:
         # has no matching bean and throws SpelEvaluationException on every /v1/* request.
         - cache-key: "getRemoteAddr()"
           bandwidths:
-            - capacity: 100
+            # BANK-18: capacity/refill are env-bound (defaults = today's 100 req/min/IP — the deployed
+            # policy, UNCHANGED). The bench (compose.bench.yaml) raises capacity to an effectively
+            # unlimited value so a single-IP load generator isn't throttled and the MACHINE capacity is
+            # measured beneath the per-caller policy. `compose config` without the override still shows
+            # 100/min, confirming the production default is intact.
+            - capacity: ${RATE_LIMIT_CAPACITY:100}
               time: 1
               unit: minutes
               refill-speed: greedy

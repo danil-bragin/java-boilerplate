@@ -1,0 +1,44 @@
+# ==============================================================================================
+# BANK-18 capacity-sweep — MEASUREMENT-ONLY override for compose.bank.yaml.
+#
+# These are NOT production settings. They lift the four PROTECTIVE policies that capped the
+# BANK-13/17 write number at a misleading ~5–10 req/s — so we can ramp each path to its REAL
+# machine knee. The deployed defaults in compose.bank.yaml / the service application.yaml files are
+# UNCHANGED; this file only overrides them for the benchmark window. Verify with:
+#
+#   docker compose -f examples/acme-bank/compose.bank.yaml config            # → 100/min, breaker 50/60s, retry 3 (prod)
+#   docker compose -f examples/acme-bank/compose.bank.yaml \
+#                  -f examples/acme-bank/compose.bench.yaml config            # → relaxed (bench)
+#
+# Bring the stack up for a capacity sweep with BOTH files:
+#   docker compose -f examples/acme-bank/compose.bank.yaml \
+#                  -f examples/acme-bank/compose.bench.yaml up -d --build --wait
+#
+# The four artifacts removed here (each env-bound in the service application.yaml with prod defaults):
+#   1. Rate-limit (bucket4j gateway, 100 req/min/IP, keyed on getRemoteAddr()) — a single-IP load
+#      generator is otherwise throttled at the per-caller POLICY, not the machine. Raised to
+#      effectively unlimited so the MACHINE capacity is measured beneath the policy.
+#   2. Circuit breaker (resilience4j transfers/accounts) — under co-located CPU starvation the
+#      downstream hop goes slow and the breaker SHEDS (503), which the closed-loop bench read as a
+#      ~5/s ceiling. Slow-call threshold raised to 5s + slow/failure rate thresholds to 100 so it
+#      doesn't trip on co-located latency (we WANT to see the real saturation point as raw 5xx).
+#   3. Retry (resilience4j transfers/accounts max-attempts) — 3 attempts amplify offered load on an
+#      already-saturated downstream. Set to 1 (no amplification) for a clean arrival-rate measurement.
+#   4. Load model — handled in the Gatling sim (open-model arrival rate, NOT closed-loop zero-think).
+# ==============================================================================================
+services:
+  gateway:
+    environment:
+      # 1. Rate-limit OFF for the bench window (per-caller policy stays 100/min in prod).
+      RATE_LIMIT_CAPACITY: "100000000"
+      # 2. Breaker relaxed: a 5s slow-call threshold + 100% slow/failure-rate thresholds means it does
+      #    not open on co-located latency. We measure the raw saturation point, not the breaker.
+      TRANSFERS_CB_SLOW_CALL_DURATION_THRESHOLD: "5s"
+      TRANSFERS_CB_SLOW_CALL_RATE_THRESHOLD: "100"
+      TRANSFERS_CB_FAILURE_RATE_THRESHOLD: "100"
+      ACCOUNTS_CB_SLOW_CALL_DURATION_THRESHOLD: "5s"
+      ACCOUNTS_CB_SLOW_CALL_RATE_THRESHOLD: "100"
+      ACCOUNTS_CB_FAILURE_RATE_THRESHOLD: "100"
+      # 3. Retry amplification OFF — one attempt, no offered-load inflation on the downstream.
+      TRANSFERS_RETRY_MAX_ATTEMPTS: "1"
+      ACCOUNTS_RETRY_MAX_ATTEMPTS: "1"
