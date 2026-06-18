@@ -32,7 +32,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.test.context.DynamicPropertyRegistrar;
 import org.testcontainers.redpanda.RedpandaContainer;
 
-@SpringBootTest
+@SpringBootTest(properties = "spring.autoconfigure.exclude=com.acme.security.autoconfigure.SecurityAutoConfiguration")
 @Import({
     PostgresTestcontainersConfiguration.class,
     RedpandaTestcontainersConfiguration.class,

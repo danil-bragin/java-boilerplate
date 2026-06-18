@@ -1,0 +1,19 @@
+spring:
+  flyway:
+    locations: classpath:db/migration/postgresql
+  kafka:
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: io.confluent.kafka.serializers.KafkaAvroSerializer
+  modulith:
+    events:
+      kafka:
+        enable-json: false
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          jwk-set-uri: http://localhost:8082/realms/bank/protocol/openid-connect/certs
+
+bucket4j:
+  enabled: false

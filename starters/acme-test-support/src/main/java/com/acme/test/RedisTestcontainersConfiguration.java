@@ -1,26 +1,29 @@
 package com.acme.test;
 
 import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.context.annotation.Bean;
+import org.springframework.test.context.DynamicPropertyRegistrar;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.utility.DockerImageName;
 
 /**
  * Importable test configuration exposing a Redis container wired to Spring Boot via
- * {@link ServiceConnection}. Integration tests {@code @Import} this to get a real Redis
+ * {@link DynamicPropertyRegistrar}. Integration tests {@code @Import} this to get a real Redis
  * with zero datasource configuration. Uses the locally-cached {@code redis:7-alpine} image.
- *
- * <p>{@code @ServiceConnection(name = "redis")} on {@link GenericContainer} is supported by
- * Spring Boot's {@code RedisContainerConnectionDetailsFactory} which accepts any
- * {@code Container<?>} whose connection name matches the known Redis image names.
  */
 @TestConfiguration(proxyBeanMethods = false)
 public class RedisTestcontainersConfiguration {
 
     @Bean
-    @ServiceConnection(name = "redis")
     GenericContainer<?> redisContainer() {
         return new GenericContainer<>(DockerImageName.parse("redis:7-alpine")).withExposedPorts(6379);
+    }
+
+    @Bean
+    DynamicPropertyRegistrar redisProperties(GenericContainer<?> redisContainer) {
+        return registry -> {
+            registry.add("spring.data.redis.host", redisContainer::getHost);
+            registry.add("spring.data.redis.port", () -> redisContainer.getMappedPort(6379));
+        };
     }
 }
