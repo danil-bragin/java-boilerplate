@@ -124,7 +124,10 @@ bucket4j:
       strategy: first
       http-status-code: TOO_MANY_REQUESTS
       rate-limits:
-        - cache-key: "@request.remoteAddr"
+        # Bucket4j's SERVLET filter passes the HttpServletRequest as the SpEL ROOT object, so the
+        # key is a method call on it — `getRemoteAddr()`. `@request.remoteAddr` (a bean reference)
+        # has no matching bean and throws SpelEvaluationException on every /v1/* request.
+        - cache-key: "getRemoteAddr()"
           bandwidths:
             - capacity: 100
               time: 1
