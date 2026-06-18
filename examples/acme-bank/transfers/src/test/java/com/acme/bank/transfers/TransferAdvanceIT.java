@@ -95,20 +95,25 @@ class TransferAdvanceIT {
             producer.flush();
         }
 
+        java.util.concurrent.atomic.AtomicReference<ConsumerRecord<String, PostingRequested>> captured =
+                new java.util.concurrent.atomic.AtomicReference<>();
         try (Consumer<String, PostingRequested> consumer = newConsumer(bootstrap, srUrl, "advance-it-approve-1-grp")) {
             consumer.subscribe(List.of("posting-requested"));
             Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
                 ConsumerRecords<String, PostingRequested> records = consumer.poll(Duration.ofMillis(500));
-                PostingRequested received = null;
                 for (ConsumerRecord<String, PostingRequested> r : records) {
-                    if (transferId.equals(r.key())) {
-                        received = r.value();
+                    if (transferId.equals(r.value().getTransferId())) {
+                        captured.set(r);
                     }
                 }
-                assertThat(received).isNotNull();
-                assertThat(received.getTransferId()).isEqualTo(transferId);
+                assertThat(captured.get()).isNotNull();
             });
         }
+        ConsumerRecord<String, PostingRequested> match = captured.get();
+        assertThat(match.value().getTransferId()).isEqualTo(transferId);
+        // BANK-15 single-writer-per-account: posting-requested is keyed by the SOURCE account
+        // (acc-src), NOT the transferId, so all of one account's postings land on one partition.
+        assertThat(match.key()).isEqualTo("acc-src");
 
         // Status should be POSTING
         String status = jdbc.queryForObject("SELECT status FROM transfer WHERE id = ?", String.class, transferId);
@@ -265,7 +270,7 @@ class TransferAdvanceIT {
                 ConsumerRecords<String, PostingRequested> records = consumer.poll(Duration.ofMillis(500));
                 long matches = 0;
                 for (ConsumerRecord<String, PostingRequested> r : records) {
-                    if (transferId.equals(r.key())) {
+                    if (transferId.equals(r.value().getTransferId())) {
                         matches++;
                     }
                 }
@@ -277,7 +282,7 @@ class TransferAdvanceIT {
             while (System.currentTimeMillis() < deadline) {
                 ConsumerRecords<String, PostingRequested> records = consumer.poll(Duration.ofMillis(500));
                 for (ConsumerRecord<String, PostingRequested> r : records) {
-                    if (transferId.equals(r.key())) {
+                    if (transferId.equals(r.value().getTransferId())) {
                         extra++;
                     }
                 }

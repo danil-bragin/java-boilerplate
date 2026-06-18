@@ -135,7 +135,10 @@ class SagaReconcilerIT {
         reconciler.reconcileOne(load(id));
 
         assertThat(statusOf(id)).isEqualTo("POSTING");
-        awaitRecord("posting-requested", id, PostingRequested.class);
+        // BANK-15: re-emitted posting-requested flows through the SAME externalization route and is now
+        // keyed by the SOURCE account ("acc-src"), not the transferId — so re-drives also land on the
+        // source account's single-writer partition. Match the record by its value's transferId.
+        awaitPostingRequested(id);
     }
 
     // (c) POSTING + not posted + age>fail -> RE-DRIVEN, NOT failed. A `posted=false` snapshot does not
@@ -153,7 +156,10 @@ class SagaReconcilerIT {
 
         // MUST NOT be failed: the reconciler may not fabricate a FAILED over money it cannot prove never moved.
         assertThat(statusOf(id)).isEqualTo("POSTING");
-        awaitRecord("posting-requested", id, PostingRequested.class);
+        // BANK-15: re-emitted posting-requested flows through the SAME externalization route and is now
+        // keyed by the SOURCE account ("acc-src"), not the transferId — so re-drives also land on the
+        // source account's single-writer partition. Match the record by its value's transferId.
+        awaitPostingRequested(id);
     }
 
     // (c2) POSTING + not posted + age>stuck-after -> emit acme.saga.stuck metric, status STILL POSTING.
@@ -173,7 +179,10 @@ class SagaReconcilerIT {
         assertThat(statusOf(id)).isEqualTo("POSTING");
         assertThat(stuckCount()).isEqualTo(before + 1.0);
         // Re-drive continues even when stuck.
-        awaitRecord("posting-requested", id, PostingRequested.class);
+        // BANK-15: re-emitted posting-requested flows through the SAME externalization route and is now
+        // keyed by the SOURCE account ("acc-src"), not the transferId — so re-drives also land on the
+        // source account's single-writer partition. Match the record by its value's transferId.
+        awaitPostingRequested(id);
     }
 
     private double stuckCount() {
@@ -237,6 +246,34 @@ class SagaReconcilerIT {
                 assertThat(holder[0]).isNotNull();
             });
             return holder[0];
+        }
+    }
+
+    /**
+     * Await a re-emitted {@code posting-requested} record for the given transferId. BANK-15 keys this
+     * topic by the SOURCE account, so we match on the record VALUE's transferId (and assert the Kafka
+     * key is the source account "acc-src" — the single-writer routing guarantee).
+     */
+    private PostingRequested awaitPostingRequested(String transferId) {
+        String bootstrap = redpanda.getBootstrapServers().replaceFirst(".*://", "");
+        String srUrl = redpanda.getSchemaRegistryAddress();
+        try (Consumer<String, PostingRequested> consumer =
+                newConsumer(bootstrap, srUrl, "posting-requested-" + transferId + "-grp")) {
+            consumer.subscribe(List.of("posting-requested"));
+            java.util.concurrent.atomic.AtomicReference<ConsumerRecord<String, PostingRequested>> holder =
+                    new java.util.concurrent.atomic.AtomicReference<>();
+            Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
+                ConsumerRecords<String, PostingRequested> records = consumer.poll(Duration.ofMillis(500));
+                for (ConsumerRecord<String, PostingRequested> r : records) {
+                    if (transferId.equals(r.value().getTransferId())) {
+                        holder.set(r);
+                    }
+                }
+                assertThat(holder.get()).isNotNull();
+            });
+            // Single-writer routing: re-driven posting-requested is keyed by the source account.
+            assertThat(holder.get().key()).isEqualTo("acc-src");
+            return holder.get().value();
         }
     }
 

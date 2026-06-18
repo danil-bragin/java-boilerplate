@@ -28,8 +28,12 @@ class TransferExternalizationConfig {
                 .mapping(TransferFailedEvent.class, TransferAvroMapper::toAvro)
                 .route(TransferRequested.class, event -> RoutingTarget.forTarget("transfer-requested")
                         .andKey(event.transferId()))
+                // BANK-15: key posting-requested by the SOURCE account, not the transferId. A
+                // source-account key → one partition → one consumer thread → a single writer per
+                // account in steady state (no lock contention). The BANK-11 pessimistic lock and the
+                // BANK-1 posting-PK anchor remain as correctness backstops at the rebalance edge.
                 .route(PostingRequestedEvent.class, event -> RoutingTarget.forTarget("posting-requested")
-                        .andKey(event.transferId()))
+                        .andKey(event.sourceAccountId()))
                 .route(TransferCompletedEvent.class, event -> RoutingTarget.forTarget("transfer-completed")
                         .andKey(event.transferId()))
                 .route(TransferFailedEvent.class, event -> RoutingTarget.forTarget("transfer-failed")
