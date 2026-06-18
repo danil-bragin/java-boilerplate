@@ -55,4 +55,5 @@ include(
     "examples:acme-bank:notifications",
     "examples:acme-bank:gateway",
     "examples:acme-bank:e2e",
+    "examples:acme-bank:benchmarks",
 )
