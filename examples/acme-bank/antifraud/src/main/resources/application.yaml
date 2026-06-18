@@ -26,6 +26,11 @@ spring:
       value-deserializer: io.confluent.kafka.serializers.KafkaAvroDeserializer
       properties:
         specific.avro.reader: true
+        # BANK-16: never silently consume an auto-created 1-partition topic. antifraud's own KafkaAdmin
+        # provisions/grows transfer-requested (and transfer-screened) to the shared partition count at
+        # context refresh (SagaTopicsConfig), BEFORE the listener subscribes — so a missing topic is a
+        # loud error, not a 1-partition funnel that would collapse screening throughput onto one thread.
+        allow.auto.create.topics: false
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: io.confluent.kafka.serializers.KafkaAvroSerializer
@@ -35,6 +40,15 @@ spring:
     events:
       kafka:
         enable-json: false
+
+acme:
+  bank:
+    topics:
+      # BANK-16: ONE shared partition count for ALL saga topics. antifraud self-provisions every saga topic
+      # it consumes (transfer-requested) OR produces (transfer-screened) at this count (SagaTopicsConfig) so
+      # partitioning is deterministic regardless of start order — KafkaAdmin create-or-modify is idempotent.
+      # Consumer concurrency stays ≤ this count.
+      partitions: ${TOPIC_PARTITIONS:6}
 
 management:
   endpoints:

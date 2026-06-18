@@ -25,6 +25,20 @@ spring:
       properties:
         specific.avro.reader: true
         schema.registry.url: ${SCHEMA_REGISTRY_URL:http://localhost:8081}
+        # BANK-16: never silently consume an auto-created 1-partition topic. notifications' own KafkaAdmin
+        # provisions/grows transfer-completed and transfer-failed to the shared partition count at context
+        # refresh (SagaTopicsConfig), BEFORE the listeners subscribe — so a missing topic is a loud error,
+        # not a 1-partition funnel that would collapse notification throughput onto one thread.
+        allow.auto.create.topics: false
+
+acme:
+  bank:
+    topics:
+      # BANK-16: ONE shared partition count for ALL saga topics. notifications self-provisions every saga
+      # topic it consumes (transfer-completed, transfer-failed) at this count (SagaTopicsConfig) so
+      # partitioning is deterministic regardless of start order — KafkaAdmin create-or-modify is idempotent.
+      # Consumer concurrency stays ≤ this count.
+      partitions: ${TOPIC_PARTITIONS:6}
 
 management:
   endpoints:

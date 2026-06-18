@@ -26,6 +26,12 @@ spring:
       value-deserializer: io.confluent.kafka.serializers.KafkaAvroDeserializer
       properties:
         specific.avro.reader: true
+        # BANK-16: never silently consume an auto-created 1-partition topic. The gateway's own KafkaAdmin
+        # provisions/grows the four projection topics to the shared partition count at context refresh
+        # (SagaTopicsConfig), BEFORE the projection listeners subscribe — so a missing topic is a loud
+        # error, not a 1-partition funnel that would collapse the read-model projection onto one thread.
+        # auto-offset-reset stays earliest: the projection rebuilds its read model from the log.
+        allow.auto.create.topics: false
     properties:
       schema.registry.url: ${SCHEMA_REGISTRY_URL:http://localhost:8081}
   security:
@@ -58,6 +64,13 @@ management:
       endpoint: ${OTEL_OTLP_TRACES_ENDPOINT:http://localhost:4318/v1/traces}
 
 acme:
+  bank:
+    topics:
+      # BANK-16: ONE shared partition count for ALL saga topics. The gateway self-provisions every saga
+      # topic its read-model projection consumes (transfer-requested, transfer-screened, transfer-completed,
+      # transfer-failed) at this count (SagaTopicsConfig) so partitioning is deterministic regardless of
+      # start order — KafkaAdmin create-or-modify is idempotent. Consumer concurrency stays ≤ this count.
+      partitions: ${TOPIC_PARTITIONS:6}
   security:
     permit-paths:
       - /actuator/health/**

@@ -59,11 +59,12 @@ spring:
 acme:
   bank:
     topics:
-      posting-requested:
-        # BANK-15: accounts (the CONSUMER) self-provisions posting-requested at this partition count so
-        # per-account write parallelism is deterministic regardless of start order or whether transfers
-        # is up — KafkaAdmin create-or-modify is idempotent, so both services declaring it is fine.
-        partitions: ${POSTING_REQUESTED_PARTITIONS:6}
+      # BANK-16: ONE shared partition count for ALL saga topics. accounts self-provisions every saga topic
+      # it produces (ledger-posted, posting-rejected) OR consumes (posting-requested) at this count
+      # (SagaTopicsConfig) so partitioning is deterministic regardless of start order or whether a producer
+      # is up — KafkaAdmin create-or-modify is idempotent, so multiple services declaring the same topic is
+      # fine. Consumer concurrency stays ≤ this count.
+      partitions: ${TOPIC_PARTITIONS:6}
   security:
     # Permit the network-internal, service-to-service surface without a bearer. `/internal/**` is
     # NOT exposed at the gateway edge (the gateway proxies only `/v1/**`) and accounts is not

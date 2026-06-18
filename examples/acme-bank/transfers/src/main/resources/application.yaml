@@ -27,6 +27,11 @@ spring:
       value-deserializer: io.confluent.kafka.serializers.KafkaAvroDeserializer
       properties:
         specific.avro.reader: true
+        # BANK-16: never silently consume an auto-created 1-partition topic. transfers' own KafkaAdmin
+        # provisions/grows every saga topic it touches to the shared partition count at context refresh
+        # (SagaTopicsConfig), BEFORE its listeners subscribe — so a missing topic is a loud error, not a
+        # 1-partition funnel that would collapse saga throughput onto one consumer thread.
+        allow.auto.create.topics: false
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: io.confluent.kafka.serializers.KafkaAvroSerializer
@@ -86,14 +91,15 @@ bucket4j:
 acme:
   bank:
     topics:
-      posting-requested:
-        # BANK-15: spread source accounts across partitions so each account is a single writer on
-        # one partition/consumer (per-account write parallelism). Each service with the NewTopic bean
-        # (transfers + accounts) provisions/grows the topic to this count at startup; the example deploys
-        # fresh so it's a one-time create. Growing partitions on a live keyed topic remaps keys — do it
-        # only on a drained topic in production. Production sets replication at the broker; dev/Redpanda
-        # is single-broker.
-        partitions: ${POSTING_REQUESTED_PARTITIONS:6}
+      # BANK-16: ONE shared partition count for ALL saga topics. transfers self-provisions every saga topic
+      # it produces (transfer-requested, posting-requested, transfer-completed, transfer-failed) OR consumes
+      # (transfer-screened, ledger-posted, posting-rejected) at this count (SagaTopicsConfig). Each source
+      # account/transfer hashes to one partition so a key serializes on one partition/consumer while
+      # different keys spread across partitions and are consumed in parallel. Each service with the NewTopic
+      # bean provisions/grows the topic to this count at startup; the example deploys fresh so it's a
+      # one-time create. Growing partitions on a live keyed topic remaps keys — do it only on a drained
+      # topic in production. Production sets replication at the broker; dev/Redpanda is single-broker.
+      partitions: ${TOPIC_PARTITIONS:6}
     reconciler:
       # The money-safe stuck-saga reconciler: re-drive pre-money states, reconcile POSTING against
       # the accounts ledger. A POSTING transfer is NEVER auto-failed — only accounts terminalizes money.

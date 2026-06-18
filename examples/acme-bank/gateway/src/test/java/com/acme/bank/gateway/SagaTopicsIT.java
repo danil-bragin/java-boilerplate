@@ -1,4 +1,4 @@
-package com.acme.bank.transfers;
+package com.acme.bank.gateway;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -22,50 +22,36 @@ import org.springframework.test.context.DynamicPropertyRegistrar;
 import org.testcontainers.redpanda.RedpandaContainer;
 
 /**
- * BANK-16: proves the auto-configured {@code KafkaAdmin} provisions EVERY saga topic that transfers touches
- * (produces or consumes) as a MULTI-partition topic from {@link com.acme.bank.transfers.config.SagaTopicsConfig}
- * — the saga-throughput prerequisite (one key → one partition; many keys spread across partitions). Builds on
- * BANK-15's {@code posting-requested} per-account write parallelism.
+ * BANK-16: proves the auto-configured {@code KafkaAdmin} provisions every saga topic the gateway read-model
+ * projection consumes ({@code transfer-requested}, {@code transfer-screened}, {@code transfer-completed},
+ * {@code transfer-failed}) as a MULTI-partition topic from {@link com.acme.bank.gateway.config.SagaTopicsConfig}
+ * — so the projection never silently subscribes to a 1-partition funnel under
+ * {@code allow.auto.create.topics=false}.
  */
-@SpringBootTest(
-        properties = {
-            "spring.autoconfigure.exclude=com.acme.security.autoconfigure.SecurityAutoConfiguration",
-            "acme.bank.topics.partitions=6"
-        })
+@SpringBootTest(properties = "acme.bank.topics.partitions=6")
 @Import({
     PostgresTestcontainersConfiguration.class,
     RedpandaTestcontainersConfiguration.class,
-    PostingRequestedTopicIT.SchemaRegistryProps.class
+    SagaTopicsIT.SchemaRegistryProps.class
 })
-class PostingRequestedTopicIT {
-
-    @Autowired
-    RedpandaContainer redpanda;
+class SagaTopicsIT {
 
     @TestConfiguration
     static class SchemaRegistryProps {
         @Bean
         DynamicPropertyRegistrar schemaRegistry(RedpandaContainer redpanda) {
-            return registry -> {
-                registry.add(
-                        "spring.kafka.producer.properties.schema.registry.url", redpanda::getSchemaRegistryAddress);
-                registry.add(
-                        "spring.kafka.consumer.properties.schema.registry.url", redpanda::getSchemaRegistryAddress);
-            };
+            return registry -> registry.add(
+                    "spring.kafka.consumer.properties.schema.registry.url", redpanda::getSchemaRegistryAddress);
         }
     }
 
+    @Autowired
+    RedpandaContainer redpanda;
+
     @Test
-    void everyTransfersSagaTopicIsMultiPartition() {
-        // Every saga topic transfers produces OR consumes (SagaTopicsConfig).
-        List<String> topics = List.of(
-                "transfer-requested",
-                "posting-requested",
-                "transfer-completed",
-                "transfer-failed",
-                "transfer-screened",
-                "ledger-posted",
-                "posting-rejected");
+    void gatewayProjectionTopicsAreMultiPartition() {
+        List<String> topics =
+                List.of("transfer-requested", "transfer-screened", "transfer-completed", "transfer-failed");
         String bootstrap = redpanda.getBootstrapServers().replaceFirst(".*://", "");
         Map<String, Object> props = new HashMap<>();
         props.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap);
