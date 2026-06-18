@@ -20,6 +20,13 @@ spring:
       observation-enabled: true
     listener:
       observation-enabled: true
+      # BANK-15: consume posting-requested partitions in PARALLEL — one thread per partition — so
+      # different source accounts post concurrently (per-account write parallelism). Within a single
+      # partition it stays single-threaded: a source account's postings serialize on ONE thread (the
+      # single-writer lane). Concurrency ≤ partition count (posting-requested has 6). The BANK-11
+      # pessimistic source lock + BANK-1 posting-PK anchor remain as correctness backstops, so even a
+      # transient two-consumer overlap on one partition during a rebalance cannot overdraw.
+      concurrency: ${ACCOUNTS_LISTENER_CONCURRENCY:6}
     consumer:
       group-id: accounts
       auto-offset-reset: earliest
