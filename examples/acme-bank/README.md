@@ -101,6 +101,42 @@ Each saga hop is covered by a per-hop Avro IT that runs against real Redpanda + 
 
 Run all tests: `gradle build`
 
+### Functional-contract assertions
+
+The per-service API ITs (`AccountApiIT`, `TransferApiIT`, `TransferQueryIT`, gateway
+`TransferControllerIT` / `AccountProxyIT`) double as black-box functional-contract tests: success
+shapes, **idempotency replay** (a repeated `Idempotency-Key` replays the same 2xx body), **validation
+400** as `application/problem+json`, **404** problem+json with the right content type, **401** for
+unauthenticated calls, and paging clamps.
+
+### End-to-end tests
+
+The `examples/acme-bank/e2e` module is a **test-only** module that brings up the *entire*
+`compose.bank.yaml` stack via Testcontainers `ComposeContainer` (`withLocalCompose(true)`,
+`withBuild(true)` — it builds the five service images from the per-service Dockerfiles), obtains a
+**real Keycloak token** (password grant on `bank-gateway`), and drives the saga through the gateway's
+public HTTP edge — exactly what ships. Scenarios:
+
+| Scenario | Proves |
+|----------|--------|
+| happy-path (`TransferSagaE2eTest`) | open two accounts → `POST /v1/transfers` → saga settles to **COMPLETED**; source/destination balances moved; destination **statement** shows the credit |
+| rejected (`SagaScenariosE2eTest`) | an amount above the antifraud `AMOUNT_LIMIT` (10000 USD) → **FAILED**, failure reason surfaced, **no money moved** |
+| idempotency (`SagaScenariosE2eTest`) | same `Idempotency-Key` + body → one transfer, source debited **once** (no double-spend) |
+| auth-negative (`SagaScenariosE2eTest`) | no bearer / a garbage bearer → **401** at the edge |
+
+Run it (Docker required):
+
+```bash
+gradle bankJars                                   # the ComposeContainer builds images from these jars
+gradle :examples:acme-bank:e2e:e2eTest            # the on-demand entrypoint
+```
+
+The e2e is **`@Tag("e2e")` and EXCLUDED from the default `gradle build`** (it needs image pulls/builds
+of Keycloak + otel-lgtm + the service images, so it is heavy and slow on a cold cache). The default
+build still compiles the e2e module's tests (`compileTestJava`), so the wiring is verified on every
+PR; the full run goes through the dedicated nightly / `workflow_dispatch` CI job. One stack is shared
+per test class (`@TestInstance(PER_CLASS)`) to bound startup cost.
+
 ---
 
 ## Run the Whole System (one command)
@@ -130,7 +166,7 @@ docker compose -f examples/acme-bank/compose.bank.yaml up --build
 
 ```bash
 # Fetch an access token for alice (password grant on the public bank-gateway client).
-# NOTE the issuer caveat below — fetch/drive from the host only if you mirror the issuer host.
+# Works straight from the host: the issuer is pinned to a constant URL (see the issuer rule below).
 TOKEN=$(curl -s \
   -d 'client_id=bank-gateway&username=alice&password=alice&grant_type=password' \
   http://localhost:8082/realms/bank/protocol/openid-connect/token | jq -r .access_token)
@@ -149,13 +185,14 @@ ADR-0020 and `TransferExternalizationIT`).
 ### The single-issuer-URL rule (avoids the classic Keycloak 401)
 
 Every service validates JWTs against **one** issuer, the in-network URL
-`http://keycloak:8080/realms/bank` (`OAUTH2_ISSUER_URI`). `KC_HOSTNAME=keycloak` pins the token's
-`iss` claim to that same URL. Therefore a token must be fetched from **inside** the compose network
-to be accepted by the services — a token fetched from the host via `http://localhost:8082` carries
-`iss=http://localhost:8082/...` and will be **rejected** (401) by the services. For host-side e2e,
-fetch the token from within the network (e.g. `docker compose exec gateway ...` or add a host alias),
-or run the e2e from a container on the same network. This single-issuer rule is the one thing that
-trips up most Keycloak-behind-a-gateway setups.
+`http://keycloak:8080/realms/bank` (`OAUTH2_ISSUER_URI`). To make that work for callers both inside
+the compose network **and** on the host, Keycloak's `KC_HOSTNAME` is set to the **full URL**
+`http://keycloak:8080` (Keycloak hostname-v2). With a full-URL hostname the frontend AND backchannel
+URLs are pinned to that constant, so **every** minted token carries `iss=http://keycloak:8080/realms/bank`
+regardless of which host the token endpoint was called from. A token fetched from the host via the
+mapped port (`localhost:8082`) is therefore accepted by the services too — which is exactly what the
+e2e relies on (it fetches the token from the host). This single-issuer rule is the one thing that
+trips up most Keycloak-behind-a-gateway setups; pinning a constant full-URL issuer is the robust fix.
 
 ### Scale horizontally
 
