@@ -1,8 +1,5 @@
 package com.acme.web.autoconfigure;
 
-import com.acme.web.IdempotencyFilter;
-import com.acme.web.IdempotencyStore;
-import com.acme.web.InMemoryIdempotencyStore;
 import com.acme.web.error.ProblemExceptionHandler;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
@@ -23,21 +20,5 @@ public class AcmeWebAutoConfiguration {
     @ConditionalOnMissingBean
     public ProblemExceptionHandler acmeProblemExceptionHandler() {
         return new ProblemExceptionHandler();
-    }
-
-    @Bean
-    @ConditionalOnMissingBean
-    public IdempotencyStore acmeIdempotencyStore() {
-        return new InMemoryIdempotencyStore();
-    }
-
-    @Bean
-    @ConditionalOnProperty(
-            prefix = "acme.web.idempotency",
-            name = "enabled",
-            havingValue = "true",
-            matchIfMissing = true)
-    public IdempotencyFilter acmeIdempotencyFilter(IdempotencyStore store) {
-        return new IdempotencyFilter(store);
     }
 }

@@ -11,6 +11,9 @@ dependencies {
     // guarded by @ConditionalOnClass; the -starter module brings them as real deps.
     compileOnly(libs.spring.boot.starter.web)
     compileOnly(libs.spring.boot.starter.validation)
+    // Redis is OPTIONAL: the RedisIdempotencyStore activates only when a StringRedisTemplate
+    // is present (multi-instance deployments). acme-web does not force Redis on every app.
+    compileOnly(libs.spring.boot.starter.data.redis)
 
     annotationProcessor(libs.spring.boot.configuration.processor)
     annotationProcessor(libs.spring.boot.autoconfigure.processor)
@@ -18,4 +21,6 @@ dependencies {
     testImplementation(libs.spring.boot.starter.web)
     testImplementation(libs.spring.boot.starter.validation)
     testImplementation(libs.spring.boot.starter.test)
+    testImplementation(libs.spring.boot.starter.data.redis)
+    testImplementation(libs.testcontainers.junit.jupiter)
 }

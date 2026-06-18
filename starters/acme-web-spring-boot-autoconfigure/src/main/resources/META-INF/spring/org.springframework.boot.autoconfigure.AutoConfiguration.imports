@@ -1,1 +1,2 @@
 com.acme.web.autoconfigure.AcmeWebAutoConfiguration
+com.acme.web.autoconfigure.IdempotencyAutoConfiguration
