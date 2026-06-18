@@ -35,8 +35,10 @@ import org.testcontainers.redpanda.RedpandaContainer;
  * own {@code SagaTopicsConfig} {@code NewTopic} bean is present in this context, so accounts'
  * {@code KafkaAdmin} provisions/grows the topic to 6 partitions at context refresh — BEFORE the
  * listener subscribes. {@link #topicIsProvisionedWithSixPartitions()} asserts this directly via
- * {@code describeTopics}, so the other cases genuinely exercise a multi-partition topic (not a
- * 1-partition auto-created funnel — auto-create is disabled in {@code application.yaml}).
+ * {@code describeTopics}, so the other cases genuinely exercise a multi-partition topic. (The
+ * Testcontainers broker still permits auto-create, so the 6 partitions come from the {@code NewTopic}
+ * provisioning — asserted here — not from any in-test auto-create gate; the deploy-time no-funnel
+ * guarantee is given by every consumer declaring a {@code NewTopic} for the topics it consumes.)
  *
  * <p>{@link #sameAccountConcurrentPostingsNeverOverdraw()} is the single-writer-per-account case:
  * produces N records for the SAME source account but DISTINCT transferIds, against the 6-partition
@@ -56,7 +58,7 @@ import org.testcontainers.redpanda.RedpandaContainer;
  * not on the same single-writer lane. This is the throughput half of the BANK-15 claim; the
  * single-account case above is the safety half.
  */
-@SpringBootTest(properties = "acme.bank.topics.posting-requested.partitions=6")
+@SpringBootTest(properties = "acme.bank.topics.partitions=6")
 @Import({
     PostgresTestcontainersConfiguration.class,
     RedpandaTestcontainersConfiguration.class,
