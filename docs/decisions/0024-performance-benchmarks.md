@@ -48,9 +48,15 @@ runs the suite, resets the breaker between aggressive runs, captures `docker sta
 (Full numbers + tables: [`../../examples/acme-bank/BENCHMARKS.md`](../../examples/acme-bank/BENCHMARKS.md).)
 
 1. **Edge rate limit (100 req/min/IP)** is the first ceiling any single-IP caller meets.
-2. **Circuit-breaker fallback is unreachable (private methods)** — once the gateway→service breaker
-   opens under burst it returns 500 and **never recovers** (half-open probes hit the same broken
-   fallback). This, not the DB, is the dominant write-path limiter. **A correctness bug to fix.**
+2. **Write-path burst limit is single-host downstream saturation, not a breaker defect** — an earlier
+   reading blamed "unreachable private fallback → 500, never recovers." That is **wrong** and was
+   corrected after a regression test (`TransferCircuitBreakerIT`) drove the real resilience4j-wrapped
+   client: the private fallback IS reachable (resilience4j calls it with `setAccessible(true)`, and its
+   `Throwable` signature matches `CallNotPermittedException`), so an open breaker returns a graceful
+   **503**, never a 500, and the breaker **recovers** (half-opens and closes once the downstream heals).
+   Under the closed-loop zero-think burst the co-located downstream is genuinely saturated for the whole
+   run, so the breaker correctly fast-fails (503) the entire time — a **tuning** matter (open-state
+   grace / window), not a correctness bug.
 3. **Source-account lock cost is in settle, not POST RPS** — the async 202 means hot vs. cross POST
    latency is identical; on this single-host stack shared-infra contention dominates the lock. The
    lock is correct; it becomes the ceiling only for a hot account on a non-saturated multi-host system.
@@ -63,9 +69,10 @@ runs the suite, resets the breaker between aggressive runs, captures `docker sta
 
 - **Standing decisions informed / reaffirmed:** keep the no-materialization derived balance (ADR-0019)
   and the pessimistic source-account lock (ADR-0022) — both measured correct-and-adequate; revisit only
-  at hot-account or million-entry extremes. Prioritize fixing the breaker-fallback visibility, keying
-  the rate limit on the authenticated subject, splitting/replicating Postgres, and raising Redpanda
-  partitions + consumer concurrency to scale settle throughput.
+  at hot-account or million-entry extremes. Prioritize tuning the circuit breaker for the co-located
+  host (open-state grace / window — the fallback and recovery are already correct), keying the rate
+  limit on the authenticated subject, splitting/replicating Postgres, and raising Redpanda partitions +
+  consumer concurrency to scale settle throughput.
 - **Honesty constraint:** the report states the co-located/single-host caveat up front and reports
   achieved numbers + the limiting resource per path; it does not fabricate prod-scale figures.
 - **Seeding hazard recorded:** a naive `MAX(id)+n` ledger seed collided with the app's

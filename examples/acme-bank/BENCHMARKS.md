@@ -53,7 +53,7 @@ reads/saga used closed concurrency. Each cell is a steady-state hold.
 |---|---|---|---|---|---|---|---|
 | cross-account (distinct sources) | 3 req/s | ~2.8 | 19 | 238 | 434 | 4.8 % (503) | gateway→transfers **circuit breaker** trips on the first 5xx burst |
 | hot-account (one shared source) | 3 req/s | ~2.9 | 18 | 30 | 439 | 3.8 % (503) | same breaker |
-| 20 concurrent (closed, zero-think) | — | n/a | — | — | — | **91–100 %** (503/429) | breaker fully open after the first burst; never recovers without a restart |
+| 20 concurrent (closed, zero-think) | — | n/a | — | — | — | **91–100 %** (503/429) | downstream saturated for the whole closed-loop run → breaker stays open and fast-fails (correct); recovers once offered load drops below what the single host can serve |
 
 The `POST /v1/transfers` returns **202 in ~18–19 ms** at the gateway — it only publishes the
 `transfer-requested` event; the money movement is the asynchronous saga (§2.3). At the POST layer,
@@ -121,26 +121,38 @@ busy single client meets. **Recommendation:** keep it for untrusted clients; key
 authenticated subject (not raw remote-IP) so a shared NAT/proxy isn't collectively throttled; raise or
 exempt it for trusted internal callers. *(The benchmark lifts it via the override to see past it.)*
 
-### Finding #1 — Circuit-breaker fallback is unreachable → writes collapse under burst (CRITICAL)
+### Finding #1 — Write path collapses under burst because the single-host downstream saturates (the breaker is behaving correctly)
 
-The single dominant write-path limiter is **not** the database or Kafka — it is the gateway's
-resilience4j circuit breaker on the synchronous `transfers`/`accounts` calls. Two compounding issues:
+The dominant write-path limiter under burst is **not** a code defect in the gateway's resilience4j
+breaker. A focused regression test (`TransferCircuitBreakerIT`) that drives the **real**
+`RestTransfersClient` (resilience4j proxy intact) against a togglable HTTP downstream proves:
 
 1. The breaker (sliding-window 10, 50 % failure threshold) opens after a brief 5xx burst — expected.
-2. **The `@CircuitBreaker` fallback methods on `RestTransfersClient` are `private`**, so when the
-   breaker is open resilience4j's reflective `FallbackMethod` throws
-   `IllegalAccessException → UndeclaredThrowableException`, returning **HTTP 500** instead of a graceful
-   degraded response. Worse, the **half-open probe calls hit the same broken fallback and re-open the
-   breaker**, so once tripped it **never recovers** — only a gateway restart clears it.
+2. **The private `@CircuitBreaker` fallback methods ARE reachable.** resilience4j invokes the
+   `fallbackMethod` reflectively *with `setAccessible(true)`*, and the `(…, Throwable cause)` signature
+   matches `CallNotPermittedException` (open circuit) too. So an open breaker returns a graceful
+   **`503 TRANSFERS_UNAVAILABLE` problem+json** via `DownstreamErrorHandler` — **never a 500**.
+3. **The breaker recovers.** Once the downstream is healthy again the breaker half-opens after
+   `wait-duration-in-open-state` and the probe call closes it — the next request returns **202**. There
+   is no "permanent wedge"; no restart is needed.
 
-Symptoms measured: at 20 concurrent zero-think transfers, 91–100 % `503`/`500`; even 2 concurrent
-zero-think users eventually wedged the breaker open; the n=10 concurrent settle probe left a transfer
-stuck non-terminal (infinite). Below ~3 req/s offered, the write path is healthy (95–96 % OK, p50
-~19 ms). **Recommendations (in priority order):** (a) make the fallback methods accessible
-(package-private/public) so degradation works and half-open can recover — this is a correctness bug,
-not a tuning knob; (b) widen the sliding window / raise the open-state grace so transient co-located
-spikes don't trip it; (c) the async 202 design is right — consider shedding load by queue depth rather
-than a synchronous breaker on the hot publish path.
+So the earlier "fallback unreachable (private) → 500, never recovers" reading was **wrong**. What the
+benchmark actually measured was the breaker *correctly shedding load* while the co-located,
+single-host downstream was genuinely saturated for the whole closed-loop, zero-think run: with the
+downstream pinned at >100 % failure the breaker legitimately stays open (and any sporadic `500`s came
+from the **transfers service itself** overloading, not from the gateway fallback). Below ~3 req/s
+offered the write path is healthy (95–96 % OK, p50 ~19 ms); the `503`s above that are the intended
+fast-fail, not a bug. The closed-loop "never recovers" is an artifact of the load profile, which kept
+the downstream saturated for the entire run — under any offered load the downstream can keep up with,
+the breaker closes again (verified).
+
+**Recommendations (in priority order):** (a) the breaker is correct — *tune* it for this co-located
+host so transient spikes recover quickly: a shorter `wait-duration-in-open-state` and a couple of
+half-open probes make recovery near-immediate once the downstream catches up (the test exercises a
+1 s open-state + 2 half-open probes and recovers within seconds); widen the sliding window / raise the
+failure threshold so a brief co-located spike doesn't trip it; (b) the async 202 design is right —
+consider shedding load by queue depth rather than a synchronous breaker on the hot publish path; (c)
+the absolute ceiling here is single-host saturation (Finding #5), not the breaker.
 
 ### Finding #2 — Source-account lock (BANK-11): the cost is in settle, not POST RPS
 
@@ -189,9 +201,11 @@ replica count.
   ~1.8 GB. Under load Postgres + gateway + accounts together exceed the host's parallelism, so
   everything throttles before any single service's app logic saturates. On a real multi-host
   deployment the per-path *relative* findings above hold; the absolute RPS will be much higher.
-- **Notifications service is down** in this stack (a pre-existing config bug: it expects
-  `schema.registry.url` which the compose does not map to its consumer) — it is a downstream event
-  consumer off the money-movement critical path, so the saga still completes. Flagged, not fixed here.
+- **Notifications service** was down in this stack due to a config bug — its consumer was missing the
+  `schema.registry.url` binding, so the `KafkaAvroDeserializer` could not resolve schemas and the
+  listener container failed → readiness DOWN. **Now fixed** (the binding was added to
+  `notifications/application.yaml`, mirroring the other services). It is a downstream event consumer off
+  the money-movement critical path, so the saga still completed even while it was down.
 - **Single-partition Redpanda** (`--smp=1`, one partition per topic) bounds saga consumer parallelism —
   raise partitions + consumer concurrency to scale the settle throughput in production.
 
@@ -202,17 +216,19 @@ replica count.
 | Path | Scales with replicas? | Bound by |
 |---|---|---|
 | Reads (balance/statement/projection) | **Yes** — stateless services, Redis idempotency, indexed SUM | Postgres CPU / read replicas |
-| Cross-account writes | **Yes** — distinct source rows post in parallel | DB write capacity, Kafka partitions, the breaker (once fixed) |
+| Cross-account writes | **Yes** — distinct source rows post in parallel | DB write capacity, Kafka partitions; the breaker fast-fails correctly once the downstream saturates |
 | **Per-(hot-)account writes** | **No** — serialized by the source-account lock by design | the pessimistic lock (correct); shard the account to scale |
 | Saga settle throughput | Partly — bound by Kafka partitions + consumer concurrency | 1-partition Redpanda here; raise partitions + concurrency |
-| Synchronous gateway→service hop | Replicas help, but the **broken-fallback breaker caps it first** | Finding #1 (fix first) |
+| Synchronous gateway→service hop | Replicas help; the breaker fast-fails correctly when the single-host downstream saturates | Finding #1 (single-host saturation, not a breaker defect) |
 
 ---
 
 ## 5. Prioritized recommendations
 
-1. **Fix the circuit-breaker fallback visibility** (Finding #1) — it is a correctness bug that turns a
-   transient spike into a permanent wedge. Highest priority.
+1. **Tune the circuit breaker for the co-located host** (Finding #1) — the fallback and recovery are
+   correct (verified by `TransferCircuitBreakerIT`), so this is a tuning knob, not a correctness bug:
+   shorten `wait-duration-in-open-state` and widen the window so a transient spike recovers fast
+   instead of fast-failing longer than the downstream actually needs.
 2. **Key the rate limit on the authenticated subject** and raise/exempt it for trusted internal callers
    (Finding #0).
 3. **Split the shared Postgres** (at least the read-heavy `accounts` DB) and add a read replica before
