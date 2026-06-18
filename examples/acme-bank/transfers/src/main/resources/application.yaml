@@ -15,3 +15,23 @@ spring:
     events:
       kafka:
         enable-json: false
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          jwk-set-uri: ${KEYCLOAK_JWKS:http://localhost:8082/realms/bank/protocol/openid-connect/certs}
+
+bucket4j:
+  enabled: true
+  filters:
+    - cache-name: rate-limit-buckets
+      url: /v1/.*
+      strategy: first
+      http-status-code: TOO_MANY_REQUESTS
+      rate-limits:
+        - cache-key: "@request.remoteAddr"
+          bandwidths:
+            - capacity: 100
+              time: 1
+              unit: minutes
+              refill-speed: greedy
