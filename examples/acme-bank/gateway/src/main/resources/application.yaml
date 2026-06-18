@@ -5,6 +5,15 @@ spring:
     url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/gateway}
     username: ${SPRING_DATASOURCE_USERNAME:acme}
     password: ${SPRING_DATASOURCE_PASSWORD:acme}
+    hikari:
+      # BANK-19b: the gateway runs 4 parallel projection listeners (transfer_view, 6 partitions each)
+      # writing the read model on every saga hop — the diagnosis showed transfer_view UPDATE at 57k calls.
+      # Default pool of 10 throttled them. Sized to 24. SUM of all service pools stays under Postgres
+      # max_connections=200.
+      maximum-pool-size: ${HIKARI_MAX_POOL:24}
+      minimum-idle: ${HIKARI_MIN_IDLE:8}
+      connection-timeout: 10000
+      max-lifetime: 600000
   jpa:
     hibernate:
       ddl-auto: validate
@@ -69,7 +78,9 @@ management:
       enabled: true
   tracing:
     sampling:
-      probability: 1.0
+      # BANK-19b: lowered 1.0 -> 0.1 for the capacity bench (see transfers yaml). Removes per-hop OTLP
+      # export overhead from the gateway accept/proxy path (the BANK-18 top-CPU service). Env-overridable.
+      probability: ${TRACING_SAMPLE_PROBABILITY:0.1}
   otlp:
     tracing:
       endpoint: ${OTEL_OTLP_TRACES_ENDPOINT:http://localhost:4318/v1/traces}

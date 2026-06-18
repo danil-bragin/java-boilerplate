@@ -5,6 +5,16 @@ spring:
     url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/accounts}
     username: ${SPRING_DATASOURCE_USERNAME:acme}
     password: ${SPRING_DATASOURCE_PASSWORD:acme}
+    hikari:
+      # BANK-19b: accounts is the money POSTING service — 6 parallel posting lanes each doing the BANK-11
+      # SELECT FOR UPDATE source lock + posting anchor + 2 ledger_entry inserts per transfer. The default
+      # pool of 10 throttled the 6 lanes. Sized to 24 so each lane has a connection + headroom; the
+      # per-account lock (not the pool) remains the only money-path serializer. SUM of pools stays under
+      # Postgres max_connections=200.
+      maximum-pool-size: ${HIKARI_MAX_POOL:24}
+      minimum-idle: ${HIKARI_MIN_IDLE:8}
+      connection-timeout: 10000
+      max-lifetime: 600000
   jpa:
     hibernate:
       ddl-auto: validate
@@ -103,7 +113,9 @@ management:
       enabled: true
   tracing:
     sampling:
-      probability: 1.0
+      # BANK-19b: lowered 1.0 -> 0.1 for the capacity bench (see transfers yaml). Removes per-hop OTLP
+      # export overhead from the money-posting path. Env-overridable; raise to 1.0 for debugging.
+      probability: ${TRACING_SAMPLE_PROBABILITY:0.1}
   otlp:
     tracing:
       endpoint: ${OTEL_OTLP_TRACES_ENDPOINT:http://localhost:4318/v1/traces}

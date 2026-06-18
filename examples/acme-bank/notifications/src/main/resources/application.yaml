@@ -5,6 +5,14 @@ spring:
     url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/notifications}
     username: ${SPRING_DATASOURCE_USERNAME:acme}
     password: ${SPRING_DATASOURCE_PASSWORD:acme}
+    hikari:
+      # BANK-19b: notifications consumes transfer-completed/failed on 6 lanes (terminal, write-light).
+      # Raised the default pool of 10 to 16. SUM of all service pools stays under Postgres
+      # max_connections=200.
+      maximum-pool-size: ${HIKARI_MAX_POOL:16}
+      minimum-idle: ${HIKARI_MIN_IDLE:4}
+      connection-timeout: 10000
+      max-lifetime: 600000
   jpa:
     hibernate:
       ddl-auto: validate
@@ -66,7 +74,8 @@ management:
       enabled: true
   tracing:
     sampling:
-      probability: 1.0
+      # BANK-19b: lowered 1.0 -> 0.1 for the capacity bench (see transfers yaml). Env-overridable.
+      probability: ${TRACING_SAMPLE_PROBABILITY:0.1}
   otlp:
     tracing:
       endpoint: ${OTEL_OTLP_TRACES_ENDPOINT:http://localhost:4318/v1/traces}

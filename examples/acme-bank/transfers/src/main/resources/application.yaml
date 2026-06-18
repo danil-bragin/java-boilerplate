@@ -5,6 +5,16 @@ spring:
     url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/transfers}
     username: ${SPRING_DATASOURCE_USERNAME:acme}
     password: ${SPRING_DATASOURCE_PASSWORD:acme}
+    hikari:
+      # BANK-19b: transfers is a HOT write-path service — the saga advances on 6 parallel listener lanes
+      # (transfer-screened/ledger-posted/posting-rejected) PLUS the synchronous POST insert. The Spring
+      # default pool of 10 starved those concurrent commits against the tuned Postgres. Sized to drive the
+      # 6 lanes + POST + reconciler concurrently. SUM of all service pools (24+24+24+16+16=104) stays well
+      # under Postgres max_connections=200 (tuning conf), with headroom.
+      maximum-pool-size: ${HIKARI_MAX_POOL:24}
+      minimum-idle: ${HIKARI_MIN_IDLE:8}
+      connection-timeout: 10000
+      max-lifetime: 600000
   jpa:
     hibernate:
       ddl-auto: validate
@@ -86,7 +96,11 @@ management:
       enabled: true
   tracing:
     sampling:
-      probability: 1.0
+      # BANK-19b: lowered 1.0 -> 0.1 for the capacity bench. 100% sampling exported a span per saga hop
+      # (~15 spans/transfer) to the OTLP collector, which the diagnosis saw at ~60-100% CPU on the
+      # observability container plus per-service export overhead. 10% keeps representative traces while
+      # removing that hot-path cost. Env-overridable; raise to 1.0 for debugging.
+      probability: ${TRACING_SAMPLE_PROBABILITY:0.1}
   otlp:
     tracing:
       endpoint: ${OTEL_OTLP_TRACES_ENDPOINT:http://localhost:4318/v1/traces}
