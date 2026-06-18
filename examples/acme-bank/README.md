@@ -103,24 +103,83 @@ Run all tests: `gradle build`
 
 ---
 
-## How to Run the Full Stack (smoke path)
+## Run the Whole System (one command)
+
+The full stack — all five services plus Postgres (one DB per service), Redpanda + Schema Registry,
+Keycloak (seeded `bank` realm), Redis (shared idempotency), and otel-lgtm (Grafana traces/metrics/logs)
+— runs from `compose.bank.yaml`. Services are containerized from per-service Dockerfiles
+(`eclipse-temurin:21-jre` + `bootJar`), so build the jars first:
 
 ```bash
-# 1. Start infrastructure
-docker compose -f examples/acme-bank/compose.bank.yaml up -d
+gradle bankJars
+docker compose -f examples/acme-bank/compose.bank.yaml up --build
+```
 
-# 2. Start each service (separate terminals or use process manager)
-gradle :examples:acme-bank:transfers:bootRun
-gradle :examples:acme-bank:antifraud:bootRun
-gradle :examples:acme-bank:accounts:bootRun
-gradle :examples:acme-bank:notifications:bootRun
+> The Keycloak (`quay.io/keycloak/keycloak:26.0`) and otel-lgtm (`grafana/otel-lgtm`) images are large;
+> the first `up` may take a while to pull them.
 
-# 3. Initiate a transfer (requires a JWT from Keycloak)
+### URLs
+
+| Service | URL |
+|---------|-----|
+| Gateway (the only published edge) | http://localhost:8080  — Swagger UI at `/swagger-ui.html` |
+| Keycloak | http://localhost:8082 (admin/admin) |
+| Grafana (traces/metrics/logs) | http://localhost:3000 |
+
+### Get a token and drive a transfer
+
+```bash
+# Fetch an access token for alice (password grant on the public bank-gateway client).
+# NOTE the issuer caveat below — fetch/drive from the host only if you mirror the issuer host.
+TOKEN=$(curl -s \
+  -d 'client_id=bank-gateway&username=alice&password=alice&grant_type=password' \
+  http://localhost:8082/realms/bank/protocol/openid-connect/token | jq -r .access_token)
+
 curl -X POST http://localhost:8080/v1/transfers \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
+  -H "Idempotency-Key: $(uuidgen)" \
   -d '{"sourceAccountId":"acc-a","destinationAccountId":"acc-b","amount":"100.00","asset":"USD"}'
 ```
 
-The saga will flow through all topics automatically. Monitor the Redpanda console at
-`http://localhost:8088` to watch events flow.
+Open Grafana → Explore → Tempo and search the trace: a single trace spans
+**gateway → transfers → Kafka → accounts** (the `traceparent` header rides the Avro records — see
+ADR-0020 and `TransferExternalizationIT`).
+
+### The single-issuer-URL rule (avoids the classic Keycloak 401)
+
+Every service validates JWTs against **one** issuer, the in-network URL
+`http://keycloak:8080/realms/bank` (`OAUTH2_ISSUER_URI`). `KC_HOSTNAME=keycloak` pins the token's
+`iss` claim to that same URL. Therefore a token must be fetched from **inside** the compose network
+to be accepted by the services — a token fetched from the host via `http://localhost:8082` carries
+`iss=http://localhost:8082/...` and will be **rejected** (401) by the services. For host-side e2e,
+fetch the token from within the network (e.g. `docker compose exec gateway ...` or add a host alias),
+or run the e2e from a container on the same network. This single-issuer rule is the one thing that
+trips up most Keycloak-behind-a-gateway setups.
+
+### Scale horizontally
+
+```bash
+docker compose -f examples/acme-bank/compose.bank.yaml up --build \
+  --scale transfers=2 --scale accounts=2
+```
+
+**Why this is safe at >1 replica:**
+
+- **transfers / accounts** — each consumed topic has **per-replica inbox dedup**, and posting is
+  **DB-anchored** (the double-entry `Posting` carries an idempotency anchor with a unique constraint).
+  Two replicas processing the same event converge to the same single posting; duplicates are no-ops.
+- **gateway** — REST idempotency is shared across replicas via **Redis** (`RedisIdempotencyStore`,
+  activated by `SPRING_DATA_REDIS_HOST=redis`). Without it, a retry routed to a different gateway
+  replica would re-execute; with it, the reservation/response is visible to every replica (SETNX +
+  TTL). Locally (no Redis) the gateway falls back to the in-memory store.
+
+### Local `bootRun` (no containers)
+
+Every service still runs locally with sensible localhost defaults (the env vars above all have
+`${VAR:localhost-default}` fallbacks):
+
+```bash
+docker compose -f examples/acme-bank/compose.bank.yaml up -d postgres redpanda keycloak observability redis
+gradle :examples:acme-bank:gateway:bootRun   # + transfers / accounts / antifraud / notifications
+```
