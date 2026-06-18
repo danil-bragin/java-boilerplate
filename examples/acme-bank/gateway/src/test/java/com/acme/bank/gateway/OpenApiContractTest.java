@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.annotation.Import;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.web.client.RestClient;
 
 /**
@@ -49,7 +50,25 @@ class OpenApiContractTest {
                     }
                 }));
 
-        assertThat(operationIds).contains("createTransfer", "getTransfer", "listTransfers");
+        assertThat(operationIds)
+                .contains(
+                        "createTransfer",
+                        "getTransfer",
+                        "listTransfers",
+                        "openAccount",
+                        "getAccount",
+                        "getAccountBalance",
+                        "getAccountStatement");
+    }
+
+    @Test
+    void servedContractByteEqualsSourceContract() throws Exception {
+        byte[] source =
+                new ClassPathResource("openapi/bank-api.yaml").getInputStream().readAllBytes();
+        byte[] served = new ClassPathResource("static/openapi/bank-api.yaml")
+                .getInputStream()
+                .readAllBytes();
+        assertThat(served).isEqualTo(source);
     }
 
     @Test

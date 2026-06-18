@@ -59,6 +59,74 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/TransferView' }
         '404': { $ref: '#/components/responses/Problem' }
+  /v1/accounts:
+    post:
+      tags: [accounts]
+      operationId: openAccount
+      summary: Open an account (idempotent via Idempotency-Key), optionally with an opening deposit
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OpenAccountRequest' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AccountView' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { description: Unauthorized }
+        '503': { $ref: '#/components/responses/Problem' }
+  /v1/accounts/{id}:
+    get:
+      tags: [accounts]
+      operationId: getAccount
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AccountView' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '503': { $ref: '#/components/responses/Problem' }
+  /v1/accounts/{id}/balance:
+    get:
+      tags: [accounts]
+      operationId: getAccountBalance
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Money' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '503': { $ref: '#/components/responses/Problem' }
+  /v1/accounts/{id}/statement:
+    get:
+      tags: [accounts]
+      operationId: getAccountStatement
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+        - { in: query, name: page, schema: { type: integer, default: 0 } }
+        - { in: query, name: size, schema: { type: integer, default: 50 } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StatementPage' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '503': { $ref: '#/components/responses/Problem' }
 components:
   securitySchemes:
     bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
@@ -108,6 +176,35 @@ components:
         page: { type: integer }
         size: { type: integer }
         totalElements: { type: integer, format: int64 }
+    OpenAccountRequest:
+      type: object
+      required: [ownerName, asset]
+      properties:
+        ownerName: { type: string }
+        asset: { type: string, example: USD }
+        initialDeposit: { $ref: '#/components/schemas/Money' }
+    AccountView:
+      type: object
+      required: [accountId, iban, status]
+      properties:
+        accountId: { type: string }
+        iban: { type: string }
+        status: { type: string, enum: [OPEN, FROZEN, CLOSED] }
+    StatementLine:
+      type: object
+      required: [postedAt, signedAmount, runningBalance]
+      properties:
+        postedAt: { type: string }
+        counterpartyAccountId: { type: string }
+        signedAmount: { type: string, description: "Exact decimal string, no float" }
+        runningBalance: { type: string, description: "Exact decimal string, no float" }
+    StatementPage:
+      type: object
+      properties:
+        accountId: { type: string }
+        page: { type: integer }
+        size: { type: integer }
+        lines: { type: array, items: { $ref: '#/components/schemas/StatementLine' } }
     Problem:
       type: object
       properties:

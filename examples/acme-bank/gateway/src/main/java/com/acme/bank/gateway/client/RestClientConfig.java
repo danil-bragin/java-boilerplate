@@ -23,6 +23,20 @@ public class RestClientConfig {
         }
     }
 
+    @ConfigurationProperties(prefix = "gateway.accounts")
+    public static class AccountsClientProperties {
+        /** Base URL of the downstream accounts service. */
+        private String baseUrl = "http://localhost:8083";
+
+        public String getBaseUrl() {
+            return baseUrl;
+        }
+
+        public void setBaseUrl(String baseUrl) {
+            this.baseUrl = baseUrl;
+        }
+    }
+
     @Bean
     TransfersClientProperties transfersClientProperties() {
         return new TransfersClientProperties();
@@ -30,6 +44,16 @@ public class RestClientConfig {
 
     @Bean
     RestClient transfersRestClientHttp(RestClient.Builder builder, TransfersClientProperties props) {
+        return builder.baseUrl(props.getBaseUrl()).build();
+    }
+
+    @Bean
+    AccountsClientProperties accountsClientProperties() {
+        return new AccountsClientProperties();
+    }
+
+    @Bean
+    RestClient accountsRestClientHttp(RestClient.Builder builder, AccountsClientProperties props) {
         return builder.baseUrl(props.getBaseUrl()).build();
     }
 }

@@ -35,6 +35,8 @@ acme:
 gateway:
   transfers:
     base-url: ${TRANSFERS_BASE_URL:http://localhost:8081}
+  accounts:
+    base-url: ${ACCOUNTS_BASE_URL:http://localhost:8083}
 
 resilience4j:
   circuitbreaker:
@@ -48,6 +50,15 @@ resilience4j:
         # opening the circuit. Only 5xx/timeouts/ResourceAccessException trip it.
         ignore-exceptions:
           - org.springframework.web.client.HttpClientErrorException
+      accounts:
+        sliding-window-size: 10
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 5s
+        permitted-number-of-calls-in-half-open-state: 3
+        # A downstream 4xx is a client error, not an accounts-side fault: it must propagate as the
+        # same 4xx and not count toward opening the circuit. Only 5xx/timeouts trip it.
+        ignore-exceptions:
+          - org.springframework.web.client.HttpClientErrorException
   retry:
     instances:
       transfers:
@@ -55,6 +66,11 @@ resilience4j:
         wait-duration: 200ms
         # Never retry a downstream 4xx — the request is deterministically rejected; retrying wastes
         # calls and (pre-fix) masked the 4xx as a 503 once retries were exhausted.
+        ignore-exceptions:
+          - org.springframework.web.client.HttpClientErrorException
+      accounts:
+        max-attempts: 3
+        wait-duration: 200ms
         ignore-exceptions:
           - org.springframework.web.client.HttpClientErrorException
 
