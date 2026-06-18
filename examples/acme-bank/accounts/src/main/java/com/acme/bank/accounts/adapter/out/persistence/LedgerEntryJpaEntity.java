@@ -9,6 +9,7 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.SequenceGenerator;
 import jakarta.persistence.Table;
+import java.time.Instant;
 
 @Entity
 @Table(name = "ledger_entry")
@@ -28,12 +29,20 @@ class LedgerEntryJpaEntity {
     @Embedded
     private MoneyAmount amount;
 
+    @Column(name = "posted_at", nullable = false)
+    private Instant postedAt;
+
     protected LedgerEntryJpaEntity() {}
 
-    LedgerEntryJpaEntity(String transferId, String accountId, MoneyAmount amount) {
+    LedgerEntryJpaEntity(String transferId, String accountId, MoneyAmount amount, Instant postedAt) {
         this.transferId = transferId;
         this.accountId = accountId;
         this.amount = amount;
+        this.postedAt = postedAt;
+    }
+
+    String getTransferId() {
+        return transferId;
     }
 
     String getAccountId() {
@@ -42,5 +51,9 @@ class LedgerEntryJpaEntity {
 
     MoneyAmount getAmount() {
         return amount;
+    }
+
+    Instant getPostedAt() {
+        return postedAt;
     }
 }

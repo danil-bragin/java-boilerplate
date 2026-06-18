@@ -11,7 +11,7 @@ public class Account {
     private final AccountId id;
 
     private final Iban iban;
-    private final AccountStatus status;
+    private AccountStatus status;
 
     public Account(AccountId id, Iban iban) {
         this(id, iban, AccountStatus.OPEN);
@@ -38,5 +38,21 @@ public class Account {
     /** Operational accounts can be debited/credited. */
     public boolean isOperational() {
         return status == AccountStatus.OPEN;
+    }
+
+    /** Freeze an OPEN account (OPEN&rarr;FROZEN). Frozen accounts are not operational. */
+    public void freeze() {
+        if (status != AccountStatus.OPEN) {
+            throw new IllegalStateException("cannot freeze an account in status " + status);
+        }
+        this.status = AccountStatus.FROZEN;
+    }
+
+    /** Close an OPEN or FROZEN account (&rarr;CLOSED). Closing a CLOSED account is illegal. */
+    public void close() {
+        if (status == AccountStatus.CLOSED) {
+            throw new IllegalStateException("account is already closed");
+        }
+        this.status = AccountStatus.CLOSED;
     }
 }
