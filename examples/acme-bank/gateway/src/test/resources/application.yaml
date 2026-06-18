@@ -1,0 +1,33 @@
+spring:
+  flyway:
+    locations: classpath:db/migration/postgresql
+  kafka:
+    consumer:
+      group-id: gateway
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: io.confluent.kafka.serializers.KafkaAvroDeserializer
+      properties:
+        specific.avro.reader: true
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          jwk-set-uri: http://localhost:8082/realms/bank/protocol/openid-connect/certs
+
+acme:
+  security:
+    permit-paths:
+      - /actuator/health/**
+      - /actuator/info
+      - /openapi/**
+      - /swagger-ui/**
+      - /swagger-ui.html
+      - /v3/api-docs/**
+
+gateway:
+  transfers:
+    base-url: http://localhost:8081
+
+bucket4j:
+  enabled: false
