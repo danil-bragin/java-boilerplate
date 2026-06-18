@@ -8,5 +8,4 @@ dependencies {
     api(libs.spring.boot.starter)
     api(libs.spring.boot.starter.web)
     api(libs.spring.boot.starter.validation)
-    api(libs.bucket4j.spring.boot.starter)
 }
