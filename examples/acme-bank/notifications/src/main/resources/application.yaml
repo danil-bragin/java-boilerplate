@@ -24,6 +24,7 @@ spring:
       value-deserializer: io.confluent.kafka.serializers.KafkaAvroDeserializer
       properties:
         specific.avro.reader: true
+        schema.registry.url: ${SCHEMA_REGISTRY_URL:http://localhost:8081}
 
 management:
   endpoints:
