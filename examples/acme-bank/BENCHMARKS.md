@@ -564,3 +564,115 @@ not correctness. Postgres is **no longer** the write limiter on this host.
 Still **one host**, now 14 vCPU / **7.65 GiB** shared across 5 service JVMs + 5 infra + Gatling. The write
 ceiling is **gateway CPU + transfers RAM** (no longer Postgres); raising the VM RAM and adding gateway
 replicas each lift it. See ADR-0029.
+
+## 10. Gateway scaling → 2k write/s reached (BANK-20)
+
+> **Headline.** The user raised the Docker VM **7.65 GiB → ~23.68 GiB** (the §9.1 #1 unlock), removing the
+> RAM starvation that gated BANK-19b. Running the **stateless gateway as 3 replicas behind an nginx
+> round-robin LB** then lifted the clean write-accept knee from BANK-19b's **~1,400/s to ≥2,200 transfers/s**
+> (**0 % error, p99 115 ms, saga lag 0 on all groups**) — **the 2,000/s target is reached and exceeded.** The
+> binding resource moved **off the single-gateway CPU** (the BANK-19b limiter) onto the **single-instance
+> transfers service (CPU + 2g RAM)**, which is the next horizontal lever. Money-safety unchanged (no money
+> logic at the edge; `synchronous_commit=on` for money DBs; `ConcurrentDebitIT` green; no sharding).
+
+### 10.1 The lever: stateless gateway replicas behind an nginx LB
+
+BANK-19b §9.4 pinned the ~1,400/s knee on **gateway CPU (3 cores maxed)** — the accept/JWT-validate/proxy
+hop, which holds **no money logic**. The gateway is **stateless across replicas**: idempotency lives in
+**shared Redis** (`RedisIdempotencyStore`), the `transfer_view` read model in **shared Postgres**, and the
+downstream saga is per-partition single-writer. So N replicas multiply the edge CPU ceiling without touching
+correctness. BANK-20 adds an `nginx` service (the only published edge, host `8080:80`) round-robining to
+`gateway:8080`, and runs the gateway via `docker compose --scale gateway=3` (host port removed).
+
+### 10.2 Resource rebalance for the 24 GiB VM
+
+| Resource | BANK-19b (7.65 GiB VM) | BANK-20 (24 GiB VM) |
+|---|---|---|
+| Postgres `mem_limit` / `shared_buffers` | 768m / 256MB | **5g / 3GB** (`effective_cache_size` 2→8GB) |
+| Postgres `max_connections` | 200 | **300** (Σ pools × 3 gateway replicas + headroom) |
+| Redpanda `--smp` / `--memory` / `mem_limit` | 2 / 1.5G / 1664m | **4 / 4G / 4608m** |
+| transfers / accounts `mem_limit` | 768m / 768m | **2g / 2g** |
+| gateway `mem_limit` × replicas | 1024m × 1 | **1536m × 3** |
+| observability `mem_limit` | 768m | 1024m |
+| Σ stack footprint | ~7.8 GiB | **~22.6 GiB** (within the 23.68 GiB VM) |
+
+WAL/checkpoint/group-commit + `synchronous_commit=on` for money DBs are **unchanged** — this is more cache
+and more replicas, not weaker durability.
+
+### 10.3 Re-bench: the new write knee through the LB (open-model ramp, bench overrides, 24 GiB VM, 3 replicas)
+
+| PEAK offered (req/s) | sustained hold (req/s) | p99 | err % | saga lag | binding resource |
+|---|---|---|---|---|---|
+| **1800** | **~1,800** | **167 ms** | **0 %** | **0** (transfers 6, drains) | gateways ~1.4 cores **each** (balanced ×3); transfers ~2.0 cores |
+| **2200** | **~2,200** | **115 ms** | **0 %** | **0 all groups** | gateways ~1.5 cores each; **transfers ~2.5 cores (clean knee)** |
+| 2800 | ~2,400 effective | 266 ms (894 ms OK-tail) | 0 % hard (0.03 % in 800–1200 ms) | bounded (transfers 4) | **transfers ~2.7 cores — emerging limiter, p99 knees** |
+
+- **Max clean write-ACCEPT QPS ≥ 2,200/s** (p99 115 ms, **0 % error**, saga lag **0** on accounts/transfers/
+  gateway) — **up from ~1,400/s, and past the 2k target.** 2,200 held flat over a 40 s steady-state hold.
+- **Sustainable saga (lag-bounded) QPS = the accept rate** at 2,200: `rpk group describe accounts transfers
+  gateway` all showed **TOTAL-LAG 0** through the 2,200 hold — the 6-partition saga drained in real time.
+- **The saturating resource MOVED again.** BANK-18 = Postgres CPU; BANK-19b = single-gateway CPU (3 cores);
+  **BANK-20 = the single-instance transfers service.** With the edge spread across 3 replicas (~1.5 cores
+  each, balanced — verified all three at ~145–150 % during the 2,200 hold), the hottest single container is
+  **transfers at ~2.5–2.8 cores + 2g RAM**. Postgres sat ~1.3 cores, Redpanda ~0.9 cores, accounts ~3 % —
+  none binding. nginx itself was only ~30–45 % of one core.
+
+### 10.4 The nginx connection-reuse finding (the throughput unlock)
+
+The first LB config resolved the upstream via a per-request `proxy_pass http://$variable`, which **cannot**
+keep upstream keepalive — nginx opened a fresh TCP connection to a gateway **per request**. At PEAK 1800 that
+collapsed to **~1,000 rps with 20 % errors** (`upstream timed out while connecting to upstream`) **while the
+gateways sat at only ~16 % CPU** — i.e. connection churn, not gateway CPU, was the artificial ceiling.
+Switching to a static `upstream { server gateway:8080; keepalive 512; }` block (Docker DNS expands the
+service name to all `--scale` replica IPs at startup; nginx round-robins; HTTP/1.1 + empty `Connection`
+header engages the keepalive pool) took the **same 1800 offered to 0 % error, p99 167 ms**. Trade-off: a
+static upstream resolves at startup, so a mid-run `--scale` change needs an nginx recreate — fine for a
+fixed-N bench; dynamic membership in prod wants NGINX-Plus `resolve` or a service mesh.
+
+### 10.5 Per-instance rate-limit caveat (carried forward, NOT fixed here)
+
+The gateway's bucket4j rate limit (100 req/min/IP, keyed on `getRemoteAddr()`) is **in-process per replica**.
+With **N replicas** behind round-robin nginx, a single caller's effective limit is **N × the per-replica
+limit** (their requests spread across replicas, each enforcing its own bucket), and the limit a given caller
+hits depends on which replica nginx routes them to. This is a **correctness-irrelevant capacity caveat** (the
+bench overrides the limit to unlimited anyway, and the limit protects, not bounds, money), but it means the
+deployed per-caller policy is no longer exact under replication. **The prod fix is a Redis-shared
+(distributed) rate limit** — bucket4j supports a Redis/Lettuce backend — so all replicas decrement one shared
+bucket per caller. **Noted, not built** in BANK-20 (separate from this capacity work). The `X-Forwarded-For`
+nginx sets means each replica still keys on the real client IP, not on nginx, so a Redis-shared bucket would
+be correct as-is.
+
+### 10.6 Honest ceiling beyond 2.2k + a robustness finding
+
+- **2,200/s is comfortably clean; 2,800 is the soft edge** (still 0 % hard error but p99 knees as transfers
+  approaches 3 cores). The next lever to push further is **horizontal transfers replicas** (transfers is
+  stateless on the accept hop; the BANK-11 source lock + Σ=0 stay per-account in shared Postgres) and/or more
+  transfers heap/CPU — **not sharding.**
+- **A pre-existing saga-relay bug surfaced under extreme overload** (an abruptly-cut 2,400 run, transfers
+  pegged at its 2g `mem_limit`): when a `transfer-screened` record processing fails, the error handler tries
+  to route it to a DLT, but the DLT producer is misconfigured (`StringSerializer` cannot serialize the Avro
+  `TransferScreened` value → `ClassCastException`), so DLT publication fails and the record retries forever,
+  growing `transfers` group lag. It is **unrelated to BANK-20** (the gateway-scaling commits touched only
+  compose + nginx + the Postgres conf — no service code) and **did NOT occur in any clean ≤2,200 run** (lag 0
+  throughout). It is a transfers DLT-config robustness issue to fix separately.
+
+### 10.7 Money-safety — intact
+
+- **No money logic at the edge** — the replicated gateway only validates JWTs, enforces idempotency (shared
+  Redis), proxies, and projects the read model (shared Postgres). The money path (accounts posting, BANK-11
+  source lock, Σ=0) is unchanged and single-writer-per-partition downstream.
+- **Idempotency across replicas — verified:** 10 identical-`Idempotency-Key` POSTs through the LB (round-
+  robined across all 3 replicas) returned the **same** `transferId` with 202 each, and the DB held **exactly
+  1** `transfer` row — shared Redis replays across replicas, never a double-submit.
+- **Projection across replicas — verified:** exactly **1** `transfer_view` row (status COMPLETED); repeated
+  LB GETs (different replicas, shared Postgres projection) all returned the **same** COMPLETED view — no
+  double-processing. Balances moved Σ=0 (source 1000.00 → 995.00, dest 0.00 → 5.00).
+- `synchronous_commit=on` for the money DBs is **unchanged**; `off` only for the rebuildable gateway
+  projection. **`ConcurrentDebitIT` (overdraft gate), `PostTransferIT`, gateway `TransferProjectionIT` green.
+  No sharding.**
+
+### 10.8 Co-located caveat (unchanged)
+
+Still **one host**, now 14 vCPU / **23.68 GiB** shared across 8 service containers (3 gateway + transfers +
+accounts + antifraud + notifications + nginx) + 5 infra + the host Gatling JVM. The write ceiling is now the
+**single-instance transfers service**; replicating it (like the gateway) is the next lift. See ADR-0030.
