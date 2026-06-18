@@ -6,6 +6,7 @@ import jakarta.persistence.Embedded;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import java.time.Instant;
 
 @Entity
 @Table(name = "transfer")
@@ -33,6 +34,9 @@ class TransferJpaEntity {
     @Column(name = "failure_reason")
     private String failureReason;
 
+    @Column(name = "updated_at", nullable = false)
+    private Instant updatedAt;
+
     protected TransferJpaEntity() {}
 
     TransferJpaEntity(
@@ -42,7 +46,8 @@ class TransferJpaEntity {
             MoneyAmount amount,
             String requestedBy,
             String status,
-            String failureReason) {
+            String failureReason,
+            Instant updatedAt) {
         this.id = id;
         this.sourceAccountId = sourceAccountId;
         this.destinationAccountId = destinationAccountId;
@@ -50,6 +55,7 @@ class TransferJpaEntity {
         this.requestedBy = requestedBy;
         this.status = status;
         this.failureReason = failureReason;
+        this.updatedAt = updatedAt;
     }
 
     String getId() {
@@ -78,5 +84,9 @@ class TransferJpaEntity {
 
     String getFailureReason() {
         return failureReason;
+    }
+
+    Instant getUpdatedAt() {
+        return updatedAt;
     }
 }

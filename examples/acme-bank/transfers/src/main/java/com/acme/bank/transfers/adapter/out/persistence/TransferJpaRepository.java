@@ -1,5 +1,6 @@
 package com.acme.bank.transfers.adapter.out.persistence;
 
+import java.time.Instant;
 import java.util.List;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -18,4 +19,13 @@ interface TransferJpaRepository extends JpaRepository<TransferJpaEntity, String>
             + "order by t.id desc")
     List<TransferJpaEntity> query(
             @Param("accountId") String accountId, @Param("status") String status, Pageable pageable);
+
+    /**
+     * Stuck transfers: a non-terminal {@code status} that has not been touched since {@code cutoff}.
+     * Oldest-first so the longest-stuck are reconciled first. Used by the saga reconciler.
+     */
+    @Query("select t from TransferJpaEntity t where t.status in :statuses "
+            + "and t.updatedAt < :cutoff order by t.updatedAt asc")
+    List<TransferJpaEntity> findStuck(
+            @Param("statuses") List<String> statuses, @Param("cutoff") Instant cutoff, Pageable pageable);
 }

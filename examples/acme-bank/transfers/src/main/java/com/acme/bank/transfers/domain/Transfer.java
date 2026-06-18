@@ -1,6 +1,7 @@
 package com.acme.bank.transfers.domain;
 
 import com.acme.money.Money;
+import java.time.Instant;
 import java.util.Objects;
 import org.jmolecules.ddd.annotation.AggregateRoot;
 import org.jmolecules.ddd.annotation.Identity;
@@ -18,6 +19,9 @@ public class Transfer {
     private final String requestedBy;
     private TransferStatus status;
     private String failureReason;
+
+    /** Last-persisted timestamp; present only on rehydrated aggregates. Drives reconciler aging. */
+    private Instant updatedAt;
 
     private Transfer(
             TransferId id, String source, String destination, Money amount, String requestedBy, TransferStatus status) {
@@ -48,8 +52,22 @@ public class Transfer {
             String requestedBy,
             TransferStatus status,
             String failureReason) {
+        return rehydrate(id, source, destination, amount, requestedBy, status, failureReason, null);
+    }
+
+    /** Rehydrate including the last-persisted {@code updatedAt} (used by the reconciler to age sagas). */
+    public static Transfer rehydrate(
+            TransferId id,
+            String source,
+            String destination,
+            Money amount,
+            String requestedBy,
+            TransferStatus status,
+            String failureReason,
+            Instant updatedAt) {
         Transfer t = new Transfer(id, source, destination, amount, requestedBy, status);
         t.failureReason = failureReason;
+        t.updatedAt = updatedAt;
         return t;
     }
 
@@ -132,5 +150,9 @@ public class Transfer {
 
     public String failureReason() {
         return failureReason;
+    }
+
+    public Instant updatedAt() {
+        return updatedAt;
     }
 }

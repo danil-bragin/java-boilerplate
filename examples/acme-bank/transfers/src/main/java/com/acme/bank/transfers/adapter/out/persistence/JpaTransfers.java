@@ -6,6 +6,7 @@ import com.acme.bank.transfers.domain.TransferStatus;
 import com.acme.bank.transfers.domain.Transfers;
 import com.acme.money.Assets;
 import com.acme.persistence.MoneyAmount;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import org.springframework.data.domain.PageRequest;
@@ -22,6 +23,7 @@ class JpaTransfers implements Transfers {
 
     @Override
     public void save(Transfer t) {
+        // Touch updated_at on every save so the reconciler can age non-terminal transfers.
         repository.save(new TransferJpaEntity(
                 t.id().value(),
                 t.sourceAccountId(),
@@ -29,7 +31,16 @@ class JpaTransfers implements Transfers {
                 MoneyAmount.from(t.amount()),
                 t.requestedBy(),
                 t.status().name(),
-                t.failureReason()));
+                t.failureReason(),
+                Instant.now()));
+    }
+
+    @Override
+    public List<Transfer> findStuck(List<TransferStatus> statuses, Instant cutoff, int limit) {
+        List<String> statusNames = statuses.stream().map(TransferStatus::name).toList();
+        return repository.findStuck(statusNames, cutoff, PageRequest.of(0, limit)).stream()
+                .map(this::rehydrate)
+                .toList();
     }
 
     @Override
@@ -58,6 +69,7 @@ class JpaTransfers implements Transfers {
                 e.getAmount().toMoney(Assets::of),
                 e.getRequestedBy(),
                 TransferStatus.valueOf(e.getStatus()),
-                e.getFailureReason());
+                e.getFailureReason(),
+                e.getUpdatedAt());
     }
 }

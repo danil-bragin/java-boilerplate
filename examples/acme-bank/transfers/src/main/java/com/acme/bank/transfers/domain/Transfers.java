@@ -1,5 +1,6 @@
 package com.acme.bank.transfers.domain;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -9,6 +10,12 @@ public interface Transfers {
     Optional<Transfer> findById(TransferId id);
 
     boolean exists(TransferId id);
+
+    /**
+     * Transfers stuck in one of the given non-terminal {@code statuses} whose last update is older
+     * than {@code cutoff}, oldest-first, capped at {@code limit}. Drives the saga reconciler sweep.
+     */
+    List<Transfer> findStuck(List<TransferStatus> statuses, Instant cutoff, int limit);
 
     /**
      * Paged query over transfers, optionally filtered by an account (matched as either source or
