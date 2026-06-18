@@ -44,6 +44,17 @@ spring:
           # everywhere so the token's `iss` matches what each service validates.
           issuer-uri: ${OAUTH2_ISSUER_URI:http://localhost:8082/realms/bank}
 
+acme:
+  security:
+    # Permit the network-internal, service-to-service surface without a bearer. `/internal/**` is
+    # NOT exposed at the gateway edge (the gateway proxies only `/v1/**`) and accounts is not
+    # published to the host in compose — so it is network-segmented, reachable only on the service
+    # network. It MUST remain network-restricted in deployment.
+    permit-paths:
+      - /actuator/health/**
+      - /actuator/info
+      - /internal/**
+
 management:
   endpoints:
     web:

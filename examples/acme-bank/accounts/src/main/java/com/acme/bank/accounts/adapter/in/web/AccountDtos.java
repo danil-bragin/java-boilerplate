@@ -23,4 +23,7 @@ final class AccountDtos {
     record StatementView(String accountId, int page, int size, List<StatementLineView> lines) {}
 
     record StatusView(String accountId, String status) {}
+
+    /** Internal money-truth view: whether a posting exists for a transfer in the ledger. */
+    record PostingStatusView(String transferId, boolean posted) {}
 }

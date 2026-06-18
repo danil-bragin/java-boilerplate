@@ -28,3 +28,12 @@ spring:
       resourceserver:
         jwt:
           jwk-set-uri: http://localhost:8082/realms/bank/protocol/openid-connect/certs
+
+# Mirror the production permit-paths (the test application.yaml fully shadows main on the classpath).
+# `/internal/**` is the network-internal posting-status query — permitted without a bearer.
+acme:
+  security:
+    permit-paths:
+      - /actuator/health/**
+      - /actuator/info
+      - /internal/**
