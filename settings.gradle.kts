@@ -48,4 +48,5 @@ include(
     "examples:demo-service",
     "examples:acme-bank:bank-contracts",
     "examples:acme-bank:accounts",
+    "examples:acme-bank:transfers",
 )

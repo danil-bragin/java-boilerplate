@@ -62,6 +62,7 @@ jmolecules-ddd = { module = "org.jmolecules:jmolecules-ddd" }
 jmolecules-events = { module = "org.jmolecules:jmolecules-events" }
 jmolecules-archunit = { module = "org.jmolecules.integrations:jmolecules-archunit" }
 archunit-junit5 = { module = "com.tngtech.archunit:archunit-junit5", version.ref = "archunit" }
+awaitility = { module = "org.awaitility:awaitility" }
 
 [plugins]
 spring-boot = { id = "org.springframework.boot", version.ref = "spring-boot" }
