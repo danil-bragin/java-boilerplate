@@ -82,3 +82,39 @@ bucket4j:
               time: 1
               unit: minutes
               refill-speed: greedy
+
+acme:
+  bank:
+    reconciler:
+      # The money-safe stuck-saga reconciler: re-drive pre-money states, reconcile POSTING against
+      # the accounts ledger, hard-timeout (SAGA_TIMEOUT) only when no money moved.
+      enabled: ${RECONCILER_ENABLED:true}
+      # How long a transfer may sit non-terminal before the reconciler nudges it (re-emits to re-drive).
+      nudge-after: ${RECONCILER_NUDGE_AFTER:PT30S}
+      # How long before a transfer is hard-failed — pre-money always; POSTING only after a confirmed
+      # `posted=false` from accounts (a transport error never fails money, it skips the round).
+      fail-after: ${RECONCILER_FAIL_AFTER:PT5M}
+      # Cadence of the scheduled sweep (a single runner across replicas via ShedLock).
+      fixed-delay: ${RECONCILER_FIXED_DELAY:PT15S}
+      batch-size: 100
+      accounts:
+        base-url: ${ACCOUNTS_BASE_URL:http://localhost:8083}
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      accounts-reconcile:
+        sliding-window-size: 10
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 5s
+        permitted-number-of-calls-in-half-open-state: 3
+        # A 4xx is a deterministic client error, not an accounts-side fault: don't trip the circuit.
+        ignore-exceptions:
+          - org.springframework.web.client.HttpClientErrorException
+  retry:
+    instances:
+      accounts-reconcile:
+        max-attempts: 3
+        wait-duration: 200ms
+        ignore-exceptions:
+          - org.springframework.web.client.HttpClientErrorException

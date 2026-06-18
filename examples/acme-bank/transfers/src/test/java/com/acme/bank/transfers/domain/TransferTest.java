@@ -71,6 +71,46 @@ class TransferTest {
     }
 
     @Test
+    void timeOutFromRequestedFailsWithSagaTimeout() {
+        Transfer t = requested();
+        t.timeOut();
+        assertThat(t.status()).isEqualTo(TransferStatus.FAILED);
+        assertThat(t.failureReason()).isEqualTo("SAGA_TIMEOUT");
+    }
+
+    @Test
+    void timeOutFromApprovedFailsWithSagaTimeout() {
+        Transfer t = requested();
+        t.approve();
+        t.timeOut();
+        assertThat(t.status()).isEqualTo(TransferStatus.FAILED);
+        assertThat(t.failureReason()).isEqualTo("SAGA_TIMEOUT");
+    }
+
+    @Test
+    void timeOutFromPostingIsNotAllowed() {
+        // POSTING is the money state — it must be RECONCILED against the ledger, never blindly
+        // timed out (money may have moved). The reconciler asks accounts before failing it.
+        Transfer t = requested();
+        t.approve();
+        t.markPosting();
+        assertThatThrownBy(t::timeOut).isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void timeOutFromTerminalIsNotAllowed() {
+        Transfer t = Transfer.rehydrate(
+                new TransferId("t-completed"),
+                "acc-src",
+                "acc-dst",
+                Money.of("100.00", Assets.USD),
+                "alice",
+                TransferStatus.COMPLETED,
+                null);
+        assertThatThrownBy(t::timeOut).isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
     void rehydratePostingAllowsComplete() {
         Transfer t = Transfer.rehydrate(
                 new TransferId("t-rehydrate-posting"),

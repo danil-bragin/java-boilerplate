@@ -84,6 +84,19 @@ public class Transfer {
         this.failureReason = reason;
     }
 
+    /**
+     * Hard-times out a stuck saga in a <em>pre-money</em> state (REQUESTED/APPROVED) → FAILED with
+     * reason {@code SAGA_TIMEOUT}. This is always money-safe: no ledger posting can have happened
+     * before POSTING. It is deliberately NOT allowed from POSTING — that state may have moved money
+     * and must be reconciled against the accounts ledger (the source of truth), never blindly timed
+     * out. Throws {@link IllegalStateException} from POSTING and from terminal states.
+     */
+    public void timeOut() {
+        requireStatus(TransferStatus.REQUESTED, TransferStatus.APPROVED);
+        this.status = TransferStatus.FAILED;
+        this.failureReason = "SAGA_TIMEOUT";
+    }
+
     private void requireStatus(TransferStatus... allowed) {
         for (TransferStatus s : allowed) {
             if (this.status == s) {

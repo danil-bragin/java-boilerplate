@@ -14,6 +14,8 @@ dependencies {
     implementation(project(":starters:acme-web-spring-boot-starter"))
     implementation(project(":starters:acme-ratelimit-spring-boot-starter"))
     implementation(project(":starters:acme-security-spring-boot-starter"))
+    // RestClient circuit-breaker/retry for the accounts money-truth query (saga reconciliation).
+    implementation(libs.resilience4j.spring.boot3)
     implementation(project(":examples:acme-bank:bank-contracts"))
     testImplementation(project(":starters:acme-test-support"))
     testImplementation(libs.spring.boot.starter.test)
