@@ -42,6 +42,11 @@ public class MixedSimulation extends Simulation {
         s.seedReadTarget(token, Math.min(BenchEnv.ledgerDepth(), 50));
         this.setup = s;
         this.readTarget = s.readTarget();
+
+        setUp(scn().injectOpen(constantUsersPerSec(BenchEnv.rate())
+                        .during(Duration.ofSeconds(BenchEnv.rampSeconds() + BenchEnv.holdSeconds()))))
+                .protocols(httpProtocol)
+                .maxDuration(Duration.ofSeconds(BenchEnv.rampSeconds() + BenchEnv.holdSeconds() + 30));
     }
 
     private ChainBuilder readChain() {
@@ -91,12 +96,5 @@ public class MixedSimulation extends Simulation {
                         percent(70).then(readChain()),
                         percent(25).then(transferChain()),
                         percent(5).then(openChain()));
-    }
-
-    {
-        setUp(scn().injectOpen(constantUsersPerSec(BenchEnv.rate())
-                        .during(Duration.ofSeconds(BenchEnv.rampSeconds() + BenchEnv.holdSeconds()))))
-                .protocols(httpProtocol)
-                .maxDuration(Duration.ofSeconds(BenchEnv.rampSeconds() + BenchEnv.holdSeconds() + 30));
     }
 }

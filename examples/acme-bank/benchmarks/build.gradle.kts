@@ -29,7 +29,14 @@ dependencies {
 
 gatling {
     // Keep the JVM modest: this runs co-located with five service containers + infra on one host.
-    jvmArgs = listOf("-Xms512m", "-Xmx1g")
+    // The --add-opens is required by Gatling's StringInternals on JDK 17+ (reflective access to
+    // java.lang for its zero-copy String stats writer).
+    jvmArgs =
+        listOf(
+            "-Xms512m",
+            "-Xmx1g",
+            "--add-opens=java.base/java.lang=ALL-UNNAMED",
+        )
 }
 
 // The benchmarks are on-demand only. `gradle build`/`check` MUST NOT run load: the gatling plugin
@@ -37,9 +44,14 @@ gatling {
 // such dependency. (Verified in Task 5: `gradle build` does not trigger a GatlingRunTask.)
 tasks.withType<GatlingRunTask>().configureEach {
     // Surface the bench system properties to the forked Gatling JVM so -DBENCH_* on the gradle
-    // command line reaches BenchEnv. The plugin forks a JVM, so we propagate explicitly.
+    // command line reaches BenchEnv, and keep the required --add-opens (the gatling{} extension's
+    // jvmArgs are NOT inherited by the task once we set jvmArgs here, so re-declare them).
     val benchProps =
         System.getProperties().stringPropertyNames().filter { it.startsWith("BENCH_") }
     jvmArgs =
-        (jvmArgs ?: emptyList()) + benchProps.map { "-D$it=${System.getProperty(it)}" }
+        listOf(
+            "-Xms512m",
+            "-Xmx1g",
+            "--add-opens=java.base/java.lang=ALL-UNNAMED",
+        ) + benchProps.map { "-D$it=${System.getProperty(it)}" }
 }

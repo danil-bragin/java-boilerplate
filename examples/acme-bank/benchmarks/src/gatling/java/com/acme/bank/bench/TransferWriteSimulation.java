@@ -2,15 +2,18 @@ package com.acme.bank.bench;
 
 import static io.gatling.javaapi.core.CoreDsl.StringBody;
 import static io.gatling.javaapi.core.CoreDsl.constantConcurrentUsers;
+import static io.gatling.javaapi.core.CoreDsl.constantUsersPerSec;
 import static io.gatling.javaapi.core.CoreDsl.exec;
 import static io.gatling.javaapi.core.CoreDsl.rampConcurrentUsers;
 import static io.gatling.javaapi.core.CoreDsl.scenario;
 import static io.gatling.javaapi.http.HttpDsl.http;
 import static io.gatling.javaapi.http.HttpDsl.status;
 
+import io.gatling.javaapi.core.ChainBuilder;
 import io.gatling.javaapi.core.ScenarioBuilder;
 import io.gatling.javaapi.core.Simulation;
 import io.gatling.javaapi.http.HttpProtocolBuilder;
+import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
@@ -52,47 +55,55 @@ public class TransferWriteSimulation extends Simulation {
             s.openPool(token, BenchEnv.poolSize());
         }
         this.setup = s;
+
+        ScenarioBuilder scn = scenario("transfer-write-" + BenchEnv.sourceMode());
+        if (BenchEnv.arrivalRate() > 0) {
+            // OPEN model: one request per arrival at a fixed offered rate — the controlled way to find
+            // the saturation knee (a closed model with zero think-time collapses past the breaker).
+            setUp(scn.exec(oneTransfer())
+                            .injectOpen(constantUsersPerSec(BenchEnv.arrivalRate())
+                                    .during(Duration.ofSeconds(BenchEnv.rampSeconds() + BenchEnv.holdSeconds()))))
+                    .protocols(httpProtocol)
+                    .maxDuration(Duration.ofSeconds(BenchEnv.rampSeconds() + BenchEnv.holdSeconds() + 30));
+        } else {
+            // Closed model: a fixed concurrency loops requests for a sustained steady-state hold.
+            setUp(scn.during(Duration.ofSeconds(BenchEnv.rampSeconds() + BenchEnv.holdSeconds()))
+                            .on(oneTransfer())
+                            .injectClosed(
+                                    rampConcurrentUsers(1)
+                                            .to(BenchEnv.users())
+                                            .during(Duration.ofSeconds(BenchEnv.rampSeconds())),
+                                    constantConcurrentUsers(BenchEnv.users())
+                                            .during(Duration.ofSeconds(BenchEnv.holdSeconds()))))
+                    .protocols(httpProtocol)
+                    .maxDuration(Duration.ofSeconds(BenchEnv.rampSeconds() + BenchEnv.holdSeconds() + 30));
+        }
     }
 
-    private ScenarioBuilder scn() {
+    /** One transfer POST, choosing the source per the cross/hot mode. */
+    private ChainBuilder oneTransfer() {
         List<String> sources = setup.sources();
         List<String> destinations = setup.destinations();
         String hotSource = setup.hotSource();
-        // Closed model: each virtual user loops requests for the whole run so a fixed concurrency
-        // produces a sustained steady-state hold (the request rate is whatever the system can absorb).
-        return scenario("transfer-write-" + BenchEnv.sourceMode())
-                .during(java.time.Duration.ofSeconds(BenchEnv.rampSeconds() + BenchEnv.holdSeconds()))
-                .on(exec(session -> {
-                            int n = ThreadLocalRandom.current().nextInt(Math.max(1, destinations.size()));
-                            String src = hot ? hotSource : sources.get(n % sources.size());
-                            String dst = destinations.get(n % destinations.size());
-                            // Cross-mode must use distinct src/dst; if they collide, shift the dest.
-                            if (src.equals(dst)) {
-                                dst = destinations.get((n + 1) % destinations.size());
-                            }
-                            String body = "{\"sourceAccountId\":\"" + src + "\",\"destinationAccountId\":\"" + dst
-                                    + "\",\"amount\":{\"value\":\"1.00\",\"asset\":\"USD\"}}";
-                            return session.set("body", body)
-                                    .set("token", tokens.next())
-                                    .set("idem", UUID.randomUUID().toString());
-                        })
-                        .exec(http("POST /v1/transfers")
-                                .post("/v1/transfers")
-                                .header("Authorization", session -> "Bearer " + session.getString("token"))
-                                .header("Idempotency-Key", session -> session.getString("idem"))
-                                .body(StringBody(session -> session.getString("body")))
-                                .check(status().is(202))));
-    }
-
-    {
-        // Ramp concurrency to BENCH_USERS over the ramp, then hold it for the steady-state window.
-        setUp(scn().injectClosed(
-                                rampConcurrentUsers(1)
-                                        .to(BenchEnv.users())
-                                        .during(java.time.Duration.ofSeconds(BenchEnv.rampSeconds())),
-                                constantConcurrentUsers(BenchEnv.users())
-                                        .during(java.time.Duration.ofSeconds(BenchEnv.holdSeconds()))))
-                .protocols(httpProtocol)
-                .maxDuration(java.time.Duration.ofSeconds(BenchEnv.rampSeconds() + BenchEnv.holdSeconds() + 30));
+        return exec(session -> {
+                    int n = ThreadLocalRandom.current().nextInt(Math.max(1, destinations.size()));
+                    String src = hot ? hotSource : sources.get(n % sources.size());
+                    String dst = destinations.get(n % destinations.size());
+                    // Cross-mode must use distinct src/dst; if they collide, shift the dest.
+                    if (src.equals(dst)) {
+                        dst = destinations.get((n + 1) % destinations.size());
+                    }
+                    String body = "{\"sourceAccountId\":\"" + src + "\",\"destinationAccountId\":\"" + dst
+                            + "\",\"amount\":{\"value\":\"1.00\",\"asset\":\"USD\"}}";
+                    return session.set("body", body)
+                            .set("token", tokens.next())
+                            .set("idem", UUID.randomUUID().toString());
+                })
+                .exec(http("POST /v1/transfers")
+                        .post("/v1/transfers")
+                        .header("Authorization", session -> "Bearer " + session.getString("token"))
+                        .header("Idempotency-Key", session -> session.getString("idem"))
+                        .body(StringBody(session -> session.getString("body")))
+                        .check(status().is(202)));
     }
 }

@@ -50,8 +50,32 @@ public final class BenchEnv {
         return intProp("BENCH_RATE", 50);
     }
 
+    /**
+     * Constant OPEN-model arrival rate (req/s) for the write path. When &gt; 0 the transfer/open
+     * simulations inject one request per arrival at this fixed rate (controlled offered load — the
+     * right way to find a saturation knee without a closed-model feedback collapse). When 0 (default)
+     * they fall back to the closed concurrency model.
+     */
+    public static int arrivalRate() {
+        return intProp("BENCH_ARRIVAL_RATE", 0);
+    }
+
     public static int ledgerDepth() {
         return intProp("BENCH_LEDGER_DEPTH", 10);
+    }
+
+    /**
+     * A pre-existing account id to read against (skips API-driven ledger seeding). Used for the
+     * deep-ledger read benchmark, where the ledger is seeded directly in Postgres ({@code
+     * ledger_entry} rows) far faster than driving thousands of saga transfers. Empty = seed via API.
+     */
+    public static String readTargetId() {
+        return prop("BENCH_READ_TARGET", "").trim();
+    }
+
+    /** A transfer id known to exist, for the projection-read leg when using a direct read target. */
+    public static String sampleTransferId() {
+        return prop("BENCH_SAMPLE_TRANSFER", "").trim();
     }
 
     /** {@code cross} (distinct sources, no lock contention) or {@code hot} (one shared source). */

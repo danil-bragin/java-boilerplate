@@ -46,7 +46,7 @@ public class OpenAccountSimulation extends Simulation {
                                 .check(status().is(201))));
     }
 
-    {
+    public OpenAccountSimulation() {
         setUp(scn().injectClosed(
                                 rampConcurrentUsers(1)
                                         .to(BenchEnv.users())

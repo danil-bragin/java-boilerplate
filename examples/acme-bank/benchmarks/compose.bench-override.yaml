@@ -1,0 +1,20 @@
+# Benchmark-only override for compose.bank.yaml. The gateway ships with a DELIBERATELY tight
+# default rate limit (bucket4j: 100 requests / minute / remote IP — see gateway application.yaml).
+# That limit is the FIRST-ORDER throttle for any single-IP load generator and is reported as such in
+# BENCHMARKS.md; but to measure the DOWNSTREAM app bottlenecks (the BANK-11 source lock, derived
+# balance reads, saga settle, DB pool) we must lift it for the run. Spring relaxed binding maps the
+# env var below onto bucket4j.filters[0].rate-limits[0].bandwidths[0].capacity.
+#
+# Apply with:
+#   docker compose -f examples/acme-bank/compose.bank.yaml \
+#                  -f examples/acme-bank/benchmarks/compose.bench-override.yaml up -d --wait
+services:
+  gateway:
+    environment:
+      # 100k req/min/IP — effectively unthrottled for the benchmark window. All three bandwidth
+      # fields must be supplied: an env override of a single list element otherwise replaces the
+      # whole bandwidths[0] map and drops time/unit (Spring relaxed-binding semantics).
+      BUCKET4J_FILTERS_0_RATE_LIMITS_0_BANDWIDTHS_0_CAPACITY: "100000"
+      BUCKET4J_FILTERS_0_RATE_LIMITS_0_BANDWIDTHS_0_TIME: "1"
+      BUCKET4J_FILTERS_0_RATE_LIMITS_0_BANDWIDTHS_0_UNIT: "minutes"
+      BUCKET4J_FILTERS_0_RATE_LIMITS_0_BANDWIDTHS_0_REFILL_SPEED: "greedy"

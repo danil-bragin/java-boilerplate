@@ -42,6 +42,13 @@ public class SagaSettleSimulation extends Simulation {
         Setup s = new Setup();
         s.openPool(tokens.any(), BenchEnv.poolSize());
         this.setup = s;
+
+        // Open arrival-rate model: a fixed POST-then-settle rate over the hold window.
+        int rate = Math.max(1, BenchEnv.rate() / 5); // settle is multi-second; keep the arrival rate gentle
+        setUp(scn().injectOpen(constantUsersPerSec(rate)
+                        .during(Duration.ofSeconds(BenchEnv.rampSeconds() + BenchEnv.holdSeconds()))))
+                .protocols(httpProtocol)
+                .maxDuration(Duration.ofSeconds(BenchEnv.rampSeconds() + BenchEnv.holdSeconds() + 60));
     }
 
     private ScenarioBuilder scn() {
@@ -83,14 +90,5 @@ public class SagaSettleSimulation extends Simulation {
 
     private static boolean isTerminal(String status) {
         return "COMPLETED".equals(status) || "FAILED".equals(status);
-    }
-
-    {
-        // Open arrival-rate model: a fixed POST-then-settle rate over the hold window.
-        int rate = Math.max(1, BenchEnv.rate() / 5); // settle is multi-second; keep the arrival rate gentle
-        setUp(scn().injectOpen(constantUsersPerSec(rate)
-                        .during(Duration.ofSeconds(BenchEnv.rampSeconds() + BenchEnv.holdSeconds()))))
-                .protocols(httpProtocol)
-                .maxDuration(Duration.ofSeconds(BenchEnv.rampSeconds() + BenchEnv.holdSeconds() + 60));
     }
 }

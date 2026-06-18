@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Keep the Gatling run output to WARN + the final stats summary; the default DEBUG request
+     tracing floods the console (one line per HTTP request) and is useless at load. -->
+<configuration>
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} [%-5level] %logger{15} -- %msg%n</pattern>
+            <immediateFlush>false</immediateFlush>
+        </encoder>
+    </appender>
+
+    <!-- Silence Gatling's per-request HTTP tracing; the run summary is printed regardless. -->
+    <logger name="io.gatling.http.engine.response" level="WARN"/>
+    <logger name="io.gatling.http.engine.tx" level="WARN"/>
+
+    <root level="WARN">
+        <appender-ref ref="CONSOLE"/>
+    </root>
+</configuration>
