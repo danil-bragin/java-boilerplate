@@ -27,6 +27,13 @@
 #   4. Load model — handled in the Gatling sim (open-model arrival rate, NOT closed-loop zero-think).
 # ==============================================================================================
 services:
+  # The transfers service ALSO ships a bucket4j 100 req/min/IP limit. Because the gateway is a SINGLE
+  # source IP to transfers, ALL gateway→transfers traffic shares ONE bucket → ~1.6/s — the relocated
+  # form of the BANK-13 ~5–10/s artifact (it masquerades as a gateway 503 since the downstream 429 is
+  # rendered via the gateway's unavailable-fallback). Lift it here for the bench window; prod = 100/min.
+  transfers:
+    environment:
+      RATE_LIMIT_CAPACITY: "100000000"
   gateway:
     environment:
       # 1. Rate-limit OFF for the bench window (per-caller policy stays 100/min in prod).
@@ -39,6 +46,10 @@ services:
       ACCOUNTS_CB_SLOW_CALL_DURATION_THRESHOLD: "5s"
       ACCOUNTS_CB_SLOW_CALL_RATE_THRESHOLD: "100"
       ACCOUNTS_CB_FAILURE_RATE_THRESHOLD: "100"
+      # Raise the breaker's minimum sample count beyond any bench window so it never collects enough
+      # calls to evaluate/open — the most robust way to take the breaker fully out of the measurement.
+      TRANSFERS_CB_MIN_CALLS: "100000000"
+      ACCOUNTS_CB_MIN_CALLS: "100000000"
       # 3. Retry amplification OFF — one attempt, no offered-load inflation on the downstream.
       TRANSFERS_RETRY_MAX_ATTEMPTS: "1"
       ACCOUNTS_RETRY_MAX_ATTEMPTS: "1"

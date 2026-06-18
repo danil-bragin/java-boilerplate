@@ -22,9 +22,12 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 COMPOSE="$ROOT/examples/acme-bank/compose.bank.yaml"
-# Benchmark override lifts the gateway's tight default rate limit (bucket4j 100 req/min/IP) so the
-# DOWNSTREAM app bottlenecks can be measured. The default limit is reported as a finding in BENCHMARKS.md.
-OVERRIDE="$ROOT/examples/acme-bank/benchmarks/compose.bench-override.yaml"
+# BANK-18: the canonical bench override lifts ALL FOUR protective artifacts (rate-limit, breaker
+# slow-call/failure thresholds, retry amplification) via env (prod defaults in compose.bank.yaml /
+# application.yaml unchanged — `docker compose -f compose.bank.yaml config` still shows 100/min +
+# breaker 50/60s + retry 3). The older benchmarks/compose.bench-override.yaml (rate-limit only) is
+# superseded by this file.
+OVERRIDE="$ROOT/examples/acme-bank/compose.bench.yaml"
 GATEWAY="${BENCH_GATEWAY_URL:-http://localhost:8080}"
 PKG="com.acme.bank.bench"
 
@@ -75,12 +78,36 @@ reset_breaker() {
   done
 }
 
+# BANK-18: read the saga consumer-group lag — the honest "writes/s the system holds" is the rate at
+# which this stays BOUNDED. Unbounded growth at the accept rate means the accept rate is NOT sustainable.
+lag() {
+  for g in accounts transfers gateway-projection; do
+    echo ">> rpk group describe $g @ $(date -u +%FT%TZ)"
+    docker compose -f "$COMPOSE" -f "$OVERRIDE" exec -T redpanda rpk group describe "$g" 2>/dev/null \
+      | grep -E "TOPIC|LAG|^$g|PARTITION" || true
+  done
+}
+
 case "${1:-all}" in
   up) up ;;
   run) shift; run "$@" ;;
   stats) stats ;;
+  lag) lag ;;
   down) down ;;
   reset) reset_breaker ;;
+  capacity)
+    # BANK-18 capacity sweep: open-model ramp-to-knee per path. Stack must already be up WITH the
+    # bench override. Watch `run-benchmarks.sh lag` during the write run to find the lag-bounded
+    # sustainable saga rate vs the peak POST-accept rate.
+    run CapacitySweepSimulation -DBENCH_CAPACITY_MODE=write -DBENCH_PEAK_RPS="${BENCH_PEAK_RPS:-200}" \
+        -DBENCH_RAMP_SECONDS="${BENCH_RAMP_SECONDS:-30}" -DBENCH_HOLD_SECONDS="${BENCH_HOLD_SECONDS:-30}" \
+        -DBENCH_POOL_SIZE="${BENCH_POOL_SIZE:-64}"
+    run CapacitySweepSimulation -DBENCH_CAPACITY_MODE=read -DBENCH_PEAK_RPS="${BENCH_PEAK_RPS:-600}" \
+        -DBENCH_RAMP_SECONDS="${BENCH_RAMP_SECONDS:-30}" -DBENCH_HOLD_SECONDS="${BENCH_HOLD_SECONDS:-30}"
+    run CapacitySweepSimulation -DBENCH_CAPACITY_MODE=mixed -DBENCH_PEAK_RPS="${BENCH_PEAK_RPS:-300}" \
+        -DBENCH_RAMP_SECONDS="${BENCH_RAMP_SECONDS:-30}" -DBENCH_HOLD_SECONDS="${BENCH_HOLD_SECONDS:-30}" \
+        -DBENCH_POOL_SIZE="${BENCH_POOL_SIZE:-64}"
+    ;;
   all)
     # The write path saturates well below the read path on this co-located host: keep transfer load
     # MODEST (open-model ~3 req/s) and reset the breaker between runs. Reads tolerate high concurrency.
@@ -97,5 +124,5 @@ case "${1:-all}" in
     stats
     down
     ;;
-  *) echo "usage: $0 {up|run <Sim>|stats|reset|down|all}" >&2; exit 2 ;;
+  *) echo "usage: $0 {up|run <Sim>|stats|lag|reset|down|capacity|all}" >&2; exit 2 ;;
 esac

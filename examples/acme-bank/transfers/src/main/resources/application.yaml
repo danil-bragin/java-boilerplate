@@ -104,7 +104,11 @@ bucket4j:
         # has no matching bean and throws SpelEvaluationException on every /v1/* request.
         - cache-key: "getRemoteAddr()"
           bandwidths:
-            - capacity: 100
+            # BANK-18: capacity is env-bound (default = today's 100 req/min/IP — UNCHANGED). The bench
+            # (compose.bench.yaml) raises it so the gateway→transfers traffic (one source IP, hence ONE
+            # shared bucket) isn't throttled to ~1.6/s — the relocated form of the BANK-13 ~5–10/s
+            # artifact. `compose config` without the override still shows 100/min.
+            - capacity: ${RATE_LIMIT_CAPACITY:100}
               time: 1
               unit: minutes
               refill-speed: greedy

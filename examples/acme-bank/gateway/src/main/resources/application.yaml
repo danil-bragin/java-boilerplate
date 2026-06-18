@@ -106,6 +106,9 @@ resilience4j:
     instances:
       transfers:
         sliding-window-size: 10
+        # Prod default 10 (= the window, resilience4j's effective minimum here). The bench raises it so
+        # the breaker never collects enough samples to open — relaxing the breaker for the sweep.
+        minimum-number-of-calls: ${TRANSFERS_CB_MIN_CALLS:10}
         failure-rate-threshold: ${TRANSFERS_CB_FAILURE_RATE_THRESHOLD:50}
         slow-call-rate-threshold: ${TRANSFERS_CB_SLOW_CALL_RATE_THRESHOLD:100}
         slow-call-duration-threshold: ${TRANSFERS_CB_SLOW_CALL_DURATION_THRESHOLD:60s}
@@ -117,6 +120,7 @@ resilience4j:
           - org.springframework.web.client.HttpClientErrorException
       accounts:
         sliding-window-size: 10
+        minimum-number-of-calls: ${ACCOUNTS_CB_MIN_CALLS:10}
         failure-rate-threshold: ${ACCOUNTS_CB_FAILURE_RATE_THRESHOLD:50}
         slow-call-rate-threshold: ${ACCOUNTS_CB_SLOW_CALL_RATE_THRESHOLD:100}
         slow-call-duration-threshold: ${ACCOUNTS_CB_SLOW_CALL_DURATION_THRESHOLD:60s}
