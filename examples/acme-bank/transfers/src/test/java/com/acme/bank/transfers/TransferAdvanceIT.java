@@ -256,6 +256,35 @@ class TransferAdvanceIT {
                     transferId);
             assertThat(count).isEqualTo(1L);
         });
+
+        // And exactly ONE outbound posting-requested is emitted for this transfer (no double-emit on redelivery).
+        try (Consumer<String, PostingRequested> consumer = newConsumer(bootstrap, srUrl, "advance-it-dup-1-grp")) {
+            consumer.subscribe(List.of("posting-requested"));
+            // First, wait until we have observed at least one record for this transfer.
+            Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
+                ConsumerRecords<String, PostingRequested> records = consumer.poll(Duration.ofMillis(500));
+                long matches = 0;
+                for (ConsumerRecord<String, PostingRequested> r : records) {
+                    if (transferId.equals(r.key())) {
+                        matches++;
+                    }
+                }
+                assertThat(matches).isGreaterThanOrEqualTo(1);
+            });
+            // Then drain for a further window and confirm no additional record arrives.
+            long extra = 0;
+            long deadline = System.currentTimeMillis() + 3000;
+            while (System.currentTimeMillis() < deadline) {
+                ConsumerRecords<String, PostingRequested> records = consumer.poll(Duration.ofMillis(500));
+                for (ConsumerRecord<String, PostingRequested> r : records) {
+                    if (transferId.equals(r.key())) {
+                        extra++;
+                    }
+                }
+            }
+            // The first untilAsserted poll consumed exactly the single emitted record; no duplicates follow.
+            assertThat(extra).isZero();
+        }
     }
 
     private static <V> Producer<String, V> newProducer(String bootstrap, String srUrl) {
