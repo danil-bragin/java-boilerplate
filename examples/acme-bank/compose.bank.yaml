@@ -1,15 +1,27 @@
 name: acme-bank-local
 
+# Full deployable stack: infra (Postgres, Redpanda+SR, Keycloak, Redis, otel-lgtm) + the five
+# bank services built from per-service Dockerfiles. Build the jars first: `gradle bankJars`.
+#
+# ISSUER-URL RULE (avoids the classic Keycloak `iss` mismatch 401): every service validates tokens
+# against http://keycloak:8080/realms/bank (the in-network issuer). KC_HOSTNAME=keycloak pins the
+# token `iss` to that same URL, so a token fetched from inside the compose network is accepted.
+# A token fetched from the HOST via http://localhost:8082 carries iss=http://localhost:8082/... and
+# will be rejected by the services — fetch tokens from within the network (see README).
+
 services:
   postgres:
     image: postgres:16-alpine
     environment:
       POSTGRES_DB: bank
-      POSTGRES_USER: bank
-      POSTGRES_PASSWORD: bank
+      POSTGRES_USER: acme
+      POSTGRES_PASSWORD: acme
+    volumes:
+      # Creates one database per service on first start (gateway/transfers/accounts/...).
+      - ./db/init-multidb.sh:/docker-entrypoint-initdb.d/init-multidb.sh:ro
     ports: ["5432:5432"]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U bank"]
+      test: ["CMD-SHELL", "pg_isready -U acme"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -25,7 +37,7 @@ services:
       - --reserve-memory=0M
       - --node-id=0
       - --kafka-addr=PLAINTEXT://0.0.0.0:9092
-      - --advertise-kafka-addr=PLAINTEXT://localhost:9092
+      - --advertise-kafka-addr=PLAINTEXT://redpanda:9092
     ports:
       - "9092:9092"   # Kafka
       - "8081:8081"   # Schema Registry
@@ -35,13 +47,35 @@ services:
       timeout: 5s
       retries: 20
 
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   keycloak:
-    image: quay.io/keycloak/keycloak:26.2
-    command: ["start-dev"]
+    image: quay.io/keycloak/keycloak:26.0
+    command: ["start-dev", "--import-realm"]
     environment:
       KEYCLOAK_ADMIN: admin
       KEYCLOAK_ADMIN_PASSWORD: admin
-    ports: ["8082:8080"]   # 8082 to avoid colliding with Schema Registry on 8081
+      # Pin the issuer hostname so token `iss` == the URL services validate against (see rule above).
+      KC_HOSTNAME: keycloak
+      KC_HOSTNAME_STRICT: "false"
+      KC_HTTP_ENABLED: "true"
+    volumes:
+      - ./keycloak/realm-bank.json:/opt/keycloak/data/import/realm-bank.json:ro
+    ports: ["8082:8080"]   # 8082 on the host to avoid colliding with Schema Registry on 8081
+    healthcheck:
+      # The realm endpoint is served once the import completes and Keycloak is ready.
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/8080 && echo -e 'GET /realms/bank HTTP/1.0\\r\\n\\r\\n' >&3 && cat <&3 | grep -q bank"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
 
   observability:
     image: grafana/otel-lgtm:latest
@@ -49,3 +83,124 @@ services:
       - "3000:3000"   # Grafana
       - "4317:4317"   # OTLP gRPC
       - "4318:4318"   # OTLP HTTP
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/3000 && echo -e 'GET / HTTP/1.0\\r\\n\\r\\n' >&3"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  # ---- Services (built from per-service Dockerfiles; `gradle bankJars` first) ----
+
+  gateway:
+    build:
+      context: ./gateway
+    depends_on:
+      postgres: {condition: service_healthy}
+      redpanda: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      keycloak: {condition: service_healthy}
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/gateway
+      SPRING_DATASOURCE_USERNAME: acme
+      SPRING_DATASOURCE_PASSWORD: acme
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+      SCHEMA_REGISTRY_URL: http://redpanda:8081
+      OAUTH2_ISSUER_URI: http://keycloak:8080/realms/bank
+      OTEL_OTLP_TRACES_ENDPOINT: http://observability:4318/v1/traces
+      # Activates acme-web's RedisIdempotencyStore so idempotency holds across gateway replicas.
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: "6379"
+      TRANSFERS_BASE_URL: http://transfers:8080
+      ACCOUNTS_BASE_URL: http://accounts:8080
+    ports: ["8080:8080"]   # the only published edge
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- localhost:8080/actuator/health/readiness | grep -q UP"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  transfers:
+    build:
+      context: ./transfers
+    depends_on:
+      postgres: {condition: service_healthy}
+      redpanda: {condition: service_healthy}
+      keycloak: {condition: service_healthy}
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/transfers
+      SPRING_DATASOURCE_USERNAME: acme
+      SPRING_DATASOURCE_PASSWORD: acme
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+      SCHEMA_REGISTRY_URL: http://redpanda:8081
+      OAUTH2_ISSUER_URI: http://keycloak:8080/realms/bank
+      OTEL_OTLP_TRACES_ENDPOINT: http://observability:4318/v1/traces
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- localhost:8080/actuator/health/readiness | grep -q UP"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  accounts:
+    build:
+      context: ./accounts
+    depends_on:
+      postgres: {condition: service_healthy}
+      redpanda: {condition: service_healthy}
+      keycloak: {condition: service_healthy}
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/accounts
+      SPRING_DATASOURCE_USERNAME: acme
+      SPRING_DATASOURCE_PASSWORD: acme
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+      SCHEMA_REGISTRY_URL: http://redpanda:8081
+      OAUTH2_ISSUER_URI: http://keycloak:8080/realms/bank
+      OTEL_OTLP_TRACES_ENDPOINT: http://observability:4318/v1/traces
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- localhost:8080/actuator/health/readiness | grep -q UP"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  antifraud:
+    build:
+      context: ./antifraud
+    depends_on:
+      postgres: {condition: service_healthy}
+      redpanda: {condition: service_healthy}
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/antifraud
+      SPRING_DATASOURCE_USERNAME: acme
+      SPRING_DATASOURCE_PASSWORD: acme
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+      SCHEMA_REGISTRY_URL: http://redpanda:8081
+      OTEL_OTLP_TRACES_ENDPOINT: http://observability:4318/v1/traces
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- localhost:8080/actuator/health/readiness | grep -q UP"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  notifications:
+    build:
+      context: ./notifications
+    depends_on:
+      postgres: {condition: service_healthy}
+      redpanda: {condition: service_healthy}
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/notifications
+      SPRING_DATASOURCE_USERNAME: acme
+      SPRING_DATASOURCE_PASSWORD: acme
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+      SCHEMA_REGISTRY_URL: http://redpanda:8081
+      OTEL_OTLP_TRACES_ENDPOINT: http://observability:4318/v1/traces
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- localhost:8080/actuator/health/readiness | grep -q UP"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
