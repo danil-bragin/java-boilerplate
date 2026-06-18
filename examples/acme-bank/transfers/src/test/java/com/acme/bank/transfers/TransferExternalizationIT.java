@@ -32,7 +32,13 @@ import org.springframework.context.annotation.Import;
 import org.springframework.test.context.DynamicPropertyRegistrar;
 import org.testcontainers.redpanda.RedpandaContainer;
 
-@SpringBootTest(properties = "spring.autoconfigure.exclude=com.acme.security.autoconfigure.SecurityAutoConfiguration")
+@SpringBootTest(
+        properties = {
+            "spring.autoconfigure.exclude=com.acme.security.autoconfigure.SecurityAutoConfiguration",
+            // Observation + W3C propagation must be on for the traceparent assertion below.
+            "spring.kafka.template.observation-enabled=true",
+            "management.tracing.sampling.probability=1.0"
+        })
 @Import({
     PostgresTestcontainersConfiguration.class,
     RedpandaTestcontainersConfiguration.class,
@@ -61,6 +67,36 @@ class TransferExternalizationIT {
     }
 
     @Test
+    void externalizedRecordCarriesTraceparentHeader() {
+        String bootstrap = redpanda.getBootstrapServers().replaceFirst(".*://", "");
+        String srUrl = redpanda.getSchemaRegistryAddress();
+
+        pipeline.send(new InitiateTransferCommand(
+                "t-trace-1", "acc-src", "acc-dst", Money.of("100.00", Assets.USD), "alice"));
+
+        try (Consumer<String, TransferRequested> consumer = newConsumer(bootstrap, srUrl, "transfer-trace-it")) {
+            consumer.subscribe(List.of("transfer-requested"));
+            Awaitility.await().atMost(Duration.ofSeconds(25)).untilAsserted(() -> {
+                ConsumerRecords<String, TransferRequested> records = consumer.poll(Duration.ofMillis(500));
+                ConsumerRecord<String, TransferRequested> traced = null;
+                for (ConsumerRecord<String, TransferRequested> r : records) {
+                    if ("t-trace-1".equals(r.value().getTransferId().toString())) {
+                        traced = r;
+                    }
+                }
+                assertThat(traced).isNotNull();
+                // With spring.kafka.template.observation-enabled + micrometer-tracing-bridge-otel +
+                // a W3C propagator (see TracePropagationAutoConfiguration), the producer observation
+                // injects the distributed trace context as a Kafka header. This is what lets a trace
+                // span gateway→transfers→Kafka→accounts in Grafana.
+                assertThat(traced.headers().lastHeader("traceparent"))
+                        .as("externalized record must carry the W3C traceparent header")
+                        .isNotNull();
+            });
+        }
+    }
+
+    @Test
     void initiatingATransferExternalizesTransferRequestedAsAvro() {
         String bootstrap = redpanda.getBootstrapServers().replaceFirst(".*://", "");
         String srUrl = redpanda.getSchemaRegistryAddress();
@@ -69,7 +105,7 @@ class TransferExternalizationIT {
                 new InitiateTransferCommand("t-ext-1", "acc-src", "acc-dst", Money.of("100.00", Assets.USD), "alice"));
         assertThat(id).isEqualTo("t-ext-1");
 
-        try (Consumer<String, TransferRequested> consumer = newConsumer(bootstrap, srUrl)) {
+        try (Consumer<String, TransferRequested> consumer = newConsumer(bootstrap, srUrl, "transfer-ext-it")) {
             consumer.subscribe(List.of("transfer-requested"));
             Awaitility.await().atMost(Duration.ofSeconds(25)).untilAsserted(() -> {
                 ConsumerRecords<String, TransferRequested> records = consumer.poll(Duration.ofMillis(500));
@@ -85,10 +121,10 @@ class TransferExternalizationIT {
         }
     }
 
-    private static Consumer<String, TransferRequested> newConsumer(String bootstrap, String srUrl) {
+    private static Consumer<String, TransferRequested> newConsumer(String bootstrap, String srUrl, String groupId) {
         Map<String, Object> props = new HashMap<>();
         props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap);
-        props.put(ConsumerConfig.GROUP_ID_CONFIG, "transfer-ext-it");
+        props.put(ConsumerConfig.GROUP_ID_CONFIG, groupId);
         props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
         props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
         props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, KafkaAvroDeserializer.class);

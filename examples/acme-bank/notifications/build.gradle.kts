@@ -8,6 +8,7 @@ dependencies {
     implementation(project(":starters:acme-money"))
     implementation(project(":starters:acme-persistence-spring-boot-starter"))
     implementation(project(":starters:acme-messaging-spring-boot-starter"))
+    implementation(project(":starters:acme-observability-spring-boot-starter"))
     implementation(project(":examples:acme-bank:bank-contracts"))
     testImplementation(project(":starters:acme-test-support"))
     testImplementation(libs.spring.boot.starter.test)

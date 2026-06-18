@@ -13,6 +13,10 @@ spring:
     locations: classpath:db/migration/{vendor}
   kafka:
     bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    # Propagate the W3C `traceparent` through Kafka (consumer side). Needs
+    # micrometer-tracing-bridge-otel (from the observability starter).
+    listener:
+      observation-enabled: true
     consumer:
       group-id: notifications
       auto-offset-reset: earliest

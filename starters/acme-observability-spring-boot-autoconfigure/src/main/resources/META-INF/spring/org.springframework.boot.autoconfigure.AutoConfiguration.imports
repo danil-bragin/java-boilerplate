@@ -1,1 +1,2 @@
 com.acme.observability.autoconfigure.SchedulerLockAutoConfiguration
+com.acme.observability.autoconfigure.TracePropagationAutoConfiguration

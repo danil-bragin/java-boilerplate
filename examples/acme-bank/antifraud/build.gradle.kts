@@ -9,6 +9,7 @@ dependencies {
     implementation(project(":starters:acme-persistence-spring-boot-starter"))
     implementation(project(":starters:acme-outbox-spring-boot-starter"))
     implementation(project(":starters:acme-messaging-spring-boot-starter"))
+    implementation(project(":starters:acme-observability-spring-boot-starter"))
     implementation(project(":starters:acme-featureflags-spring-boot-starter"))
     implementation(project(":examples:acme-bank:bank-contracts"))
     testImplementation(project(":starters:acme-test-support"))
