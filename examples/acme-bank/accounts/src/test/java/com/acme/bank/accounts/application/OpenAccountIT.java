@@ -7,6 +7,9 @@ import com.acme.money.Assets;
 import com.acme.money.Money;
 import com.acme.test.PostgresTestcontainersConfiguration;
 import java.math.BigDecimal;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -87,5 +90,54 @@ class OpenAccountIT {
                 BigDecimal.class,
                 first.accountId());
         assertThat(balance).isEqualByComparingTo("50.00"); // not 100.00 — opened once
+    }
+
+    @Test
+    void concurrentSameRequestIdReturnsSameAccount() throws Exception {
+        String requestId = "req-open-conc";
+        var command = new OpenAccountCommand(requestId, "Edsger Dijkstra", Assets.USD, Money.of("25.00", Assets.USD));
+
+        int threads = 2;
+        var pool = Executors.newFixedThreadPool(threads);
+        var start = new CountDownLatch(1);
+        var done = new CountDownLatch(threads);
+        var ids = new AtomicReference<String>();
+        var mismatch = new AtomicReference<String>();
+        for (int i = 0; i < threads; i++) {
+            pool.submit(() -> {
+                try {
+                    start.await();
+                    // The loser must NOT surface a 500 — it re-resolves and returns the winner.
+                    OpenAccountResult r = pipeline.send(command);
+                    String prev = ids.compareAndExchange(null, r.accountId());
+                    if (prev != null && !prev.equals(r.accountId())) {
+                        mismatch.set(prev + " != " + r.accountId());
+                    }
+                } catch (Exception e) {
+                    mismatch.set("threw: " + e);
+                } finally {
+                    done.countDown();
+                }
+            });
+        }
+        start.countDown();
+        done.await();
+        pool.shutdown();
+
+        // Both threads returned the SAME account, none threw.
+        assertThat(mismatch.get()).isNull();
+        assertThat(ids.get()).isNotNull();
+
+        // Exactly one account row (beyond bank-equity) and one open_request row.
+        Long accountRows = jdbc.queryForObject("SELECT count(*) FROM account WHERE id = ?", Long.class, ids.get());
+        assertThat(accountRows).isEqualTo(1L);
+        Long openRequests =
+                jdbc.queryForObject("SELECT count(*) FROM open_request WHERE request_id = ?", Long.class, requestId);
+        assertThat(openRequests).isEqualTo(1L);
+        Long mappedAccounts = jdbc.queryForObject(
+                "SELECT count(*) FROM account WHERE id = (SELECT account_id FROM open_request WHERE request_id = ?)",
+                Long.class,
+                requestId);
+        assertThat(mappedAccounts).isEqualTo(1L);
     }
 }

@@ -13,7 +13,11 @@ import com.acme.bank.accounts.domain.Posting;
 import com.acme.money.Money;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * Opens an account and, if funded, books the opening deposit as a real double-entry posting from the
@@ -30,10 +34,20 @@ public class OpenAccountHandler implements Command.Handler<OpenAccountCommand, O
     private final Ledger ledger;
     private final OpenRequests openRequests;
 
-    public OpenAccountHandler(Accounts accounts, Ledger ledger, OpenRequests openRequests) {
+    /**
+     * The open is attempted in its OWN inner transaction so a concurrent double-open's PK violation
+     * rolls back only that attempt, leaving the surrounding transaction clean enough to re-resolve and
+     * return the winning account (instead of poisoning it and surfacing a 500).
+     */
+    private final TransactionTemplate openTx;
+
+    public OpenAccountHandler(
+            Accounts accounts, Ledger ledger, OpenRequests openRequests, PlatformTransactionManager txManager) {
         this.accounts = accounts;
         this.ledger = ledger;
         this.openRequests = openRequests;
+        this.openTx = new TransactionTemplate(txManager);
+        this.openTx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
 
     @Override
@@ -41,30 +55,42 @@ public class OpenAccountHandler implements Command.Handler<OpenAccountCommand, O
         // Idempotency: a retry with the same request id returns the already-opened account.
         var existing = openRequests.findAccountId(command.requestId());
         if (existing.isPresent()) {
-            Account account =
-                    accounts.findById(existing.get()).orElseThrow(() -> new AccountNotFoundException(existing.get()));
-            return new OpenAccountResult(
-                    account.id().value(),
-                    account.iban().value(),
-                    account.status().name());
+            return resolve(existing.get());
         }
 
         AccountId accountId = new AccountId(UUID.randomUUID().toString());
-        Iban iban = Iban.forAccount(accountId);
-        Account account = new Account(accountId, iban, command.asset());
-        accounts.save(account);
-        // Anchor the open on the request id (flush -> PK guard against a concurrent double-open).
-        openRequests.record(command.requestId(), accountId);
+        try {
+            // Attempt the open in its own transaction: the open_request flush is the PK guard against a
+            // concurrent double-open, and on violation only this inner transaction rolls back.
+            return openTx.execute(status -> {
+                Iban iban = Iban.forAccount(accountId);
+                Account account = new Account(accountId, iban, command.asset());
+                accounts.save(account);
+                openRequests.record(command.requestId(), accountId);
 
-        Money deposit = command.initialDeposit();
-        if (deposit != null && deposit.isPositive()) {
-            AccountId equity = new AccountId(SYSTEM_EQUITY_ACCOUNT_ID);
-            Posting opening = new Posting(
-                    "open-" + accountId.value(),
-                    List.of(new LedgerEntry(accountId, deposit), new LedgerEntry(equity, deposit.negate())));
-            ledger.save(opening);
+                Money deposit = command.initialDeposit();
+                if (deposit != null && deposit.isPositive()) {
+                    AccountId equity = new AccountId(SYSTEM_EQUITY_ACCOUNT_ID);
+                    Posting opening = new Posting(
+                            "open-" + accountId.value(),
+                            List.of(new LedgerEntry(accountId, deposit), new LedgerEntry(equity, deposit.negate())));
+                    ledger.save(opening);
+                }
+                return new OpenAccountResult(
+                        account.id().value(),
+                        account.iban().value(),
+                        account.status().name());
+            });
+        } catch (DataIntegrityViolationException raceLost) {
+            // A true-concurrent open with the same request id won the race: re-resolve and return the
+            // winner's account (no double-open) rather than surfacing the constraint violation as a 500.
+            AccountId winner = openRequests.findAccountId(command.requestId()).orElseThrow(() -> raceLost);
+            return resolve(winner);
         }
+    }
 
+    private OpenAccountResult resolve(AccountId accountId) {
+        Account account = accounts.findById(accountId).orElseThrow(() -> new AccountNotFoundException(accountId));
         return new OpenAccountResult(
                 account.id().value(), account.iban().value(), account.status().name());
     }
