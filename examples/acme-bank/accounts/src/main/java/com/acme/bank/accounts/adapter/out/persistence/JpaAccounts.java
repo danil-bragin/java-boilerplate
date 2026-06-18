@@ -24,4 +24,10 @@ class JpaAccounts implements Accounts {
                 .map(e -> new Account(
                         new AccountId(e.getId()), new Iban(e.getIban()), AccountStatus.valueOf(e.getStatus())));
     }
+
+    @Override
+    public void save(Account account) {
+        repository.save(new AccountJpaEntity(
+                account.id().value(), account.iban().value(), account.status().name()));
+    }
 }
