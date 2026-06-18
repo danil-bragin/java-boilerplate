@@ -36,6 +36,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistrar;
 import org.testcontainers.redpanda.RedpandaContainer;
 
@@ -62,6 +63,38 @@ class ScreeningIT {
 
     @Autowired
     RedpandaContainer redpanda;
+
+    @Autowired
+    JdbcTemplate jdbc;
+
+    @Test
+    void duplicateRequestIsScreenedOnce() {
+        String bootstrap = redpanda.getBootstrapServers().replaceFirst(".*://", "");
+        String srUrl = redpanda.getSchemaRegistryAddress();
+
+        String transferId = "screen-it-dup-1";
+        try (Producer<String, TransferRequested> producer = newProducer(bootstrap, srUrl)) {
+            var record = new ProducerRecord<>(
+                    "transfer-requested",
+                    transferId,
+                    buildTransferRequested(transferId, Money.of("500.00", Assets.USD)));
+            producer.send(record);
+            producer.send(record); // redelivery of the same event
+            producer.flush();
+        }
+
+        // The inbox dedup must apply the screening exactly once despite two deliveries.
+        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
+            Long decisions = jdbc.queryForObject(
+                    "SELECT count(*) FROM screening_decision WHERE transfer_id = ?", Long.class, transferId);
+            assertThat(decisions).isEqualTo(1L);
+        });
+        Long inbox = jdbc.queryForObject(
+                "SELECT count(*) FROM processed_messages WHERE listener = 'antifraud' AND message_id = ?",
+                Long.class,
+                transferId);
+        assertThat(inbox).isEqualTo(1L);
+    }
 
     @Test
     void smallAmountIsApproved() {
