@@ -36,6 +36,10 @@ spring:
         # refresh (SagaTopicsConfig), BEFORE the listeners subscribe — so a missing topic is a loud error,
         # not a 1-partition funnel that would collapse notification throughput onto one thread.
         allow.auto.create.topics: false
+        # BANK-16 latency tuning: shorten the fetch wait so a terminal event is notified promptly under
+        # light load, and bound the per-poll batch. Pure latency knobs — keying/inbox untouched.
+        fetch.max.wait.ms: ${KAFKA_FETCH_MAX_WAIT_MS:50}
+        max.poll.records: ${KAFKA_MAX_POLL_RECORDS:50}
 
 acme:
   bank:

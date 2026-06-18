@@ -38,9 +38,24 @@ spring:
         # (SagaTopicsConfig), BEFORE its listeners subscribe — so a missing topic is a loud error, not a
         # 1-partition funnel that would collapse saga throughput onto one consumer thread.
         allow.auto.create.topics: false
+        # BANK-16 latency tuning: shorten the fetch wait so a result event is delivered promptly under
+        # light load, and bound the per-poll batch. Pure latency knobs — no delivery/ordering guarantee
+        # changes (auto-offset-reset stays earliest; keying/inbox/anchor untouched).
+        fetch.max.wait.ms: ${KAFKA_FETCH_MAX_WAIT_MS:50}
+        max.poll.records: ${KAFKA_MAX_POLL_RECORDS:50}
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: io.confluent.kafka.serializers.KafkaAvroSerializer
+      # BANK-16: durability is NON-NEGOTIABLE for money — acks=all (wait for in-sync replicas) and the
+      # idempotent producer (no duplicate/reordered writes on retry) are set EXPLICITLY so they can never
+      # be silently weakened. These are the Kafka 3.x defaults; pinning them makes the money guarantee
+      # load-bearing in config, not a default.
+      acks: all
+      properties:
+        enable.idempotence: true
+        # Small batching window: linger up to a few ms to coalesce sends WITHOUT trading durability.
+        # Low value (≈5ms) favors settle latency; acks/idempotence above are unaffected.
+        linger.ms: ${KAFKA_LINGER_MS:5}
     properties:
       schema.registry.url: ${SCHEMA_REGISTRY_URL:http://localhost:8081}
   modulith:

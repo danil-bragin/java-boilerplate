@@ -36,9 +36,21 @@ spring:
         # context refresh (SagaTopicsConfig), BEFORE the listener subscribes — so a missing topic is a
         # loud error, not a 1-partition funnel that would collapse screening throughput onto one thread.
         allow.auto.create.topics: false
+        # BANK-16 latency tuning: shorten the fetch wait so a transfer-requested event is screened promptly
+        # under light load, and bound the per-poll batch. Pure latency knobs — keying/inbox untouched.
+        fetch.max.wait.ms: ${KAFKA_FETCH_MAX_WAIT_MS:50}
+        max.poll.records: ${KAFKA_MAX_POLL_RECORDS:50}
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: io.confluent.kafka.serializers.KafkaAvroSerializer
+      # BANK-16: durability is NON-NEGOTIABLE — antifraud emits transfer-screened with acks=all and the
+      # idempotent producer set EXPLICITLY so they can never be silently weakened. These are the Kafka 3.x
+      # defaults; pinning them makes the guarantee load-bearing in config.
+      acks: all
+      properties:
+        enable.idempotence: true
+        # Small batching window favors settle latency without trading durability (acks/idempotence above).
+        linger.ms: ${KAFKA_LINGER_MS:5}
     properties:
       schema.registry.url: ${SCHEMA_REGISTRY_URL:http://localhost:8081}
   modulith:
