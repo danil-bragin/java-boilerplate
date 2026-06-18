@@ -51,4 +51,5 @@ include(
     "examples:acme-bank:accounts",
     "examples:acme-bank:transfers",
     "examples:acme-bank:antifraud",
+    "examples:acme-bank:notifications",
 )
