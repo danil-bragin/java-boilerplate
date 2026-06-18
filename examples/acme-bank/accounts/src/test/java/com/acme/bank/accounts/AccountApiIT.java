@@ -3,6 +3,7 @@ package com.acme.bank.accounts;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -173,6 +174,39 @@ class AccountApiIT {
     void unknownAccountIs404() throws Exception {
         mvc.perform(get("/v1/accounts/{id}", "does-not-exist").with(jwt()))
                 .andExpect(status().isNotFound())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.type").exists())
+                .andExpect(jsonPath("$.title").exists())
+                .andExpect(jsonPath("$.status").value(404))
                 .andExpect(jsonPath("$.code").value("ACCOUNT_NOT_FOUND"));
+    }
+
+    @Test
+    void rejectsBlankDepositAmountWith400() throws Exception {
+        // A blank initialDeposit.value violates @NotBlank on MoneyView -> 400 problem+json.
+        String blankAmount =
+                "{\"ownerName\":\"Ada\",\"asset\":\"USD\",\"initialDeposit\":{\"value\":\"\",\"asset\":\"USD\"}}";
+        mvc.perform(post("/v1/accounts")
+                        .with(jwt())
+                        .header("Idempotency-Key", "bad-amount-" + System.nanoTime())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(blankAmount))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
+    }
+
+    @Test
+    void rejectsBlankAssetWith400() throws Exception {
+        // A blank asset violates @NotBlank on OpenAccountRequest -> 400 problem+json.
+        String blankAsset = "{\"ownerName\":\"Ada\",\"asset\":\"\"}";
+        mvc.perform(post("/v1/accounts")
+                        .with(jwt())
+                        .header("Idempotency-Key", "bad-asset-" + System.nanoTime())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(blankAsset))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
     }
 }

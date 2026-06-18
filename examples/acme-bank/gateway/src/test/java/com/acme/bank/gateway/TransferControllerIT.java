@@ -3,6 +3,7 @@ package com.acme.bank.gateway;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -86,7 +87,52 @@ class TransferControllerIT {
     void getMissingTransferReturns404ProblemJson() throws Exception {
         mvc.perform(get("/v1/transfers/{id}", "does-not-exist").with(jwt()))
                 .andExpect(status().isNotFound())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.type").exists())
+                .andExpect(jsonPath("$.title").exists())
+                .andExpect(jsonPath("$.status").value(404))
                 .andExpect(jsonPath("$.code").value("TRANSFER_NOT_FOUND"));
+    }
+
+    @Test
+    void repeatedIdempotencyKeyReplaysTheSame202Body() throws Exception {
+        String first = mvc.perform(post("/v1/transfers")
+                        .with(jwt())
+                        .header("Idempotency-Key", "idem-replay")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(VALID))
+                .andExpect(status().isAccepted())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        // A retry with the SAME key replays the stored 2xx response byte-for-byte (idempotency filter).
+        String second = mvc.perform(post("/v1/transfers")
+                        .with(jwt())
+                        .header("Idempotency-Key", "idem-replay")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(VALID))
+                .andExpect(status().isAccepted())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        org.assertj.core.api.Assertions.assertThat(second).isEqualTo(first);
+    }
+
+    @Test
+    void malformedBodyMissingAmountReturns400ProblemJson() throws Exception {
+        String missingAmount = "{\"sourceAccountId\":\"a\",\"destinationAccountId\":\"b\"}";
+        mvc.perform(post("/v1/transfers")
+                        .with(jwt())
+                        .header("Idempotency-Key", "idem-bad")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(missingAmount))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.type").exists())
+                .andExpect(jsonPath("$.title").exists())
+                .andExpect(jsonPath("$.status").value(400));
     }
 
     private void seedView(String id, String status) {
