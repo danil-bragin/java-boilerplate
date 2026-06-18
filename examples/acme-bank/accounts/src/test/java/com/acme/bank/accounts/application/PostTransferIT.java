@@ -75,6 +75,22 @@ class PostTransferIT {
     }
 
     @Test
+    void rejectsPostingFromNonOperationalAccountWithoutMovingMoney() {
+        jdbc.update("INSERT INTO account(id, iban, status) VALUES (?, ?, 'FROZEN')", "frozen", "IBAN-frozen");
+        openAccount("dst-op");
+        seedBalance("frozen", "500.00");
+
+        long before = jdbc.queryForObject("SELECT count(*) FROM ledger_entry", Long.class);
+        PostTransferResult result =
+                pipeline.send(new PostTransferCommand("t-frozen", "frozen", "dst-op", Money.of("50.00", Assets.USD)));
+
+        assertThat(result.posted()).isFalse();
+        assertThat(result.reason()).isEqualTo("ACCOUNT_NOT_OPERATIONAL");
+        long after = jdbc.queryForObject("SELECT count(*) FROM ledger_entry", Long.class);
+        assertThat(after).isEqualTo(before);
+    }
+
+    @Test
     void postingIsIdempotentByTransferId() {
         openAccount("s2");
         openAccount("d2");

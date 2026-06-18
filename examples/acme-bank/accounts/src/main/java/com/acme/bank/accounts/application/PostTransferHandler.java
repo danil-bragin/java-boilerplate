@@ -1,6 +1,7 @@
 package com.acme.bank.accounts.application;
 
 import an.awesome.pipelinr.Command;
+import com.acme.bank.accounts.domain.Account;
 import com.acme.bank.accounts.domain.AccountId;
 import com.acme.bank.accounts.domain.AccountNotFoundException;
 import com.acme.bank.accounts.domain.Accounts;
@@ -30,8 +31,12 @@ public class PostTransferHandler implements Command.Handler<PostTransferCommand,
         AccountId destId = new AccountId(command.destinationAccountId());
         Money amount = command.amount();
 
-        accounts.findById(sourceId).orElseThrow(() -> new AccountNotFoundException(sourceId));
-        accounts.findById(destId).orElseThrow(() -> new AccountNotFoundException(destId));
+        Account source = accounts.findById(sourceId).orElseThrow(() -> new AccountNotFoundException(sourceId));
+        Account dest = accounts.findById(destId).orElseThrow(() -> new AccountNotFoundException(destId));
+
+        if (!source.isOperational() || !dest.isOperational()) {
+            return PostTransferResult.rejected(command.transferId(), "ACCOUNT_NOT_OPERATIONAL");
+        }
 
         Money balance = ledger.balance(sourceId, amount.asset());
         if (balance.compareTo(amount) < 0) {
