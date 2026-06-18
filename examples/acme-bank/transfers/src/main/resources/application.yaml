@@ -87,13 +87,17 @@ acme:
   bank:
     reconciler:
       # The money-safe stuck-saga reconciler: re-drive pre-money states, reconcile POSTING against
-      # the accounts ledger, hard-timeout (SAGA_TIMEOUT) only when no money moved.
+      # the accounts ledger. A POSTING transfer is NEVER auto-failed — only accounts terminalizes money.
       enabled: ${RECONCILER_ENABLED:true}
       # How long a transfer may sit non-terminal before the reconciler nudges it (re-emits to re-drive).
       nudge-after: ${RECONCILER_NUDGE_AFTER:PT30S}
-      # How long before a transfer is hard-failed — pre-money always; POSTING only after a confirmed
-      # `posted=false` from accounts (a transport error never fails money, it skips the round).
+      # How long before a PRE-MONEY transfer (REQUESTED/APPROVED) is hard-failed (SAGA_TIMEOUT). A POSTING
+      # transfer is never failed by the reconciler — a `posted=false` snapshot does not prove money never
+      # moved (a still-in-flight posting-requested could post later); only accounts may terminalize it.
       fail-after: ${RECONCILER_FAIL_AFTER:PT5M}
+      # How long an unposted POSTING transfer may sit before it is surfaced as genuinely stuck: emit the
+      # `acme.saga.stuck` metric + WARN ("page a human"). State is NOT changed; re-drive continues. ≥ fail-after.
+      stuck-after: ${RECONCILER_STUCK_AFTER:PT15M}
       # Cadence of the scheduled sweep (a single runner across replicas via ShedLock).
       fixed-delay: ${RECONCILER_FIXED_DELAY:PT15S}
       batch-size: 100

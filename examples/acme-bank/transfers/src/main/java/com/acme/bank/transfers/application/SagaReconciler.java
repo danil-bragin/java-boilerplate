@@ -8,6 +8,7 @@ import com.acme.bank.transfers.domain.TransferFailedEvent;
 import com.acme.bank.transfers.domain.TransferRequested;
 import com.acme.bank.transfers.domain.TransferStatus;
 import com.acme.bank.transfers.domain.Transfers;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -26,21 +27,34 @@ import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Money-safe stuck-saga reconciler. A ShedLock-guarded scheduled sweep finds non-terminal transfers
- * older than the configured thresholds and drives them to a terminal state without ever moving (or
- * un-moving) money:
+ * older than the configured thresholds and drives them toward a terminal state without ever moving
+ * (or un-moving) money — and, critically, without ever <em>fabricating</em> a terminal over money it
+ * cannot prove never moved:
  *
  * <ul>
  *   <li><b>Pre-money</b> (REQUESTED/APPROVED): re-emit the upstream event to re-drive (idempotent,
- *       inbox-deduped downstream); past {@code fail-after}, hard {@code timeOut()} → SAGA_TIMEOUT —
- *       always safe because no ledger posting can have happened yet.
- *   <li><b>POSTING</b> (the money state): ask accounts' ledger — the source of truth.
+ *       inbox-deduped downstream); past {@code fail-after}, hard {@code timeOut()} → SAGA_TIMEOUT.
+ *       This is the ONLY auto-FAILED path — always safe because no ledger posting can have happened
+ *       before {@code POSTING}.
+ *   <li><b>POSTING</b> (the money state): a POSTING transfer is reconciled against accounts' ledger
+ *       but is <b>NEVER auto-failed</b> by the reconciler. Only the money authority (accounts)
+ *       terminalizes a posting: {@code ledger-posted} → COMPLETED or accounts' own
+ *       {@code posting-rejected} → FAILED (the {@code PostingResultListener} path).
  *       <ul>
- *         <li>{@code posted=true} → {@code complete()} (recovers a lost {@code ledger-posted});
- *         <li>{@code posted=false} and past {@code fail-after} → {@code fail(SAGA_TIMEOUT)} (money
- *             confirmed not moved → safe to fail); otherwise re-emit {@code posting-requested};
- *         <li>transport error (empty) → SKIP this round. A POSTING transfer is NEVER failed on the
- *             absence of an answer — only on a confirmed {@code false}. This is the money-safety
- *             invariant that preserves the BANK-11 strong-consistency guarantee end-to-end.
+ *         <li>{@code posted=true} → {@code complete()} (recovers a lost {@code ledger-posted}); safe
+ *             because money provably moved.
+ *         <li>{@code posted=false} → <b>re-drive only</b>: re-emit {@code posting-requested}
+ *             (idempotent — accounts' inbox dedups; if it already posted, the next reconcile sees
+ *             {@code posted=true} and completes). Do NOT fail, regardless of age. A
+ *             {@code posted=false} answer is a POINT-IN-TIME snapshot ("not posted YET"), not a proof
+ *             that money never moved: a still-in-flight {@code posting-requested} (unconsumed inbox /
+ *             retry backoff / in {@code posting-requested-dlt} awaiting replay) could post AFTER the
+ *             reconciler ran. Failing here would risk source-debited + dest-credited on a transfer
+ *             the system already declared FAILED.
+ *         <li>{@code posted=false} and past {@code stuck-after} → emit the {@code acme.saga.stuck}
+ *             metric + a WARN identifying the transferId ("page a human" — money genuinely stuck,
+ *             accounts permanently unreachable). State stays {@code POSTING}; re-drive continues.
+ *         <li>transport error (empty) → SKIP this round, no state change.
  *       </ul>
  * </ul>
  *
@@ -54,6 +68,9 @@ public class SagaReconciler {
 
     private static final Logger log = LoggerFactory.getLogger(SagaReconciler.class);
 
+    /** Counter incremented when a POSTING transfer is genuinely stuck (past {@code stuck-after}). */
+    static final String STUCK_COUNTER = "acme.saga.stuck";
+
     private static final List<TransferStatus> NON_TERMINAL =
             List.of(TransferStatus.REQUESTED, TransferStatus.APPROVED, TransferStatus.POSTING);
 
@@ -62,18 +79,21 @@ public class SagaReconciler {
     private final ApplicationEventPublisher events;
     private final ReconcilerProperties props;
     private final ObjectProvider<SagaReconciler> self;
+    private final ObjectProvider<MeterRegistry> meterRegistry;
 
     public SagaReconciler(
             Transfers transfers,
             AccountsPostingClient accountsPostingClient,
             ApplicationEventPublisher events,
             ReconcilerProperties props,
-            ObjectProvider<SagaReconciler> self) {
+            ObjectProvider<SagaReconciler> self,
+            ObjectProvider<MeterRegistry> meterRegistry) {
         this.transfers = transfers;
         this.accountsPostingClient = accountsPostingClient;
         this.events = events;
         this.props = props;
         this.self = self;
+        this.meterRegistry = meterRegistry;
     }
 
     @Scheduled(fixedDelayString = "${acme.bank.reconciler.fixed-delay:PT15S}")
@@ -108,27 +128,42 @@ public class SagaReconciler {
         if (t.status() == TransferStatus.POSTING) {
             Optional<Boolean> posted = accountsPostingClient.posted(id);
             if (posted.isEmpty()) {
-                // Transport error — never fail money on a failed query. Skip this round.
+                // Transport error — never act on the absence of an answer. Skip this round.
                 log.info("reconciler: accounts unreachable for POSTING transfer {} — skipping round", id);
                 return;
             }
             if (posted.get()) {
-                // Ledger confirms money moved: complete (recovers a lost ledger-posted event).
+                // Ledger confirms money moved: complete (recovers a lost ledger-posted event). This is
+                // the only terminal the reconciler may apply to a POSTING transfer — money provably moved.
                 t.complete();
                 transfers.save(t);
                 events.publishEvent(new TransferCompletedEvent(id));
                 log.info("reconciler: POSTING transfer {} confirmed posted — completed", id);
-            } else if (pastFail) {
-                // Money confirmed NOT moved and past the hard timeout: safe to fail.
-                t.fail("SAGA_TIMEOUT");
-                transfers.save(t);
-                events.publishEvent(new TransferFailedEvent(id, "SAGA_TIMEOUT"));
-                log.warn("reconciler: POSTING transfer {} confirmed not posted past fail-after — SAGA_TIMEOUT", id);
-            } else {
-                // Not yet at the hard timeout: re-drive the posting (idempotent at accounts).
-                events.publishEvent(
-                        new PostingRequestedEvent(id, t.sourceAccountId(), t.destinationAccountId(), t.amount()));
-                log.info("reconciler: re-emitted posting-requested for stuck POSTING transfer {}", id);
+                return;
+            }
+
+            // posted=false: a POINT-IN-TIME snapshot ("not posted YET"), NOT a proof money never moved.
+            // A still-in-flight posting-requested (unconsumed inbox / retry backoff / awaiting DLT replay)
+            // could post AFTER us; accounts has no fence/cancellation. So we NEVER fail — only re-drive.
+            // Re-emit is idempotent: accounts' inbox dedups, and if it already posted, the next reconcile
+            // sees posted=true and completes. A POSTING transfer reaches terminal ONLY via accounts'
+            // authority (ledger-posted → COMPLETED / posting-rejected → FAILED).
+            events.publishEvent(
+                    new PostingRequestedEvent(id, t.sourceAccountId(), t.destinationAccountId(), t.amount()));
+            log.info("reconciler: re-emitted posting-requested for stuck POSTING transfer {}", id);
+
+            if (isOlderThan(t, props.getStuckAfter())) {
+                // Genuinely stuck (accounts permanently unreachable / posting permanently in-flight):
+                // surface for manual resolution. State stays POSTING — only accounts may terminalize it.
+                MeterRegistry registry = meterRegistry.getIfAvailable();
+                if (registry != null) {
+                    registry.counter(STUCK_COUNTER, "status", t.status().name()).increment();
+                }
+                log.warn(
+                        "reconciler: POSTING transfer {} stuck past stuck-after (not posted, accounts not "
+                                + "terminalizing) — emitted {}, NOT failing; manual resolution required",
+                        id,
+                        STUCK_COUNTER);
             }
             return;
         }

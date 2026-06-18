@@ -68,6 +68,12 @@ class SagaReconcilerIT {
                         "spring.kafka.producer.properties.schema.registry.url", redpanda::getSchemaRegistryAddress);
             };
         }
+
+        // A real registry so the reconciler's acme.saga.stuck counter is observable in the test.
+        @Bean
+        io.micrometer.core.instrument.MeterRegistry meterRegistry() {
+            return new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+        }
     }
 
     @Autowired
@@ -81,6 +87,9 @@ class SagaReconcilerIT {
 
     @Autowired
     SagaReconciler reconciler;
+
+    @Autowired
+    io.micrometer.core.instrument.MeterRegistry meterRegistry;
 
     @MockitoBean
     com.acme.bank.transfers.adapter.out.reconcile.AccountsPostingClient accountsPostingClient;
@@ -129,20 +138,48 @@ class SagaReconcilerIT {
         awaitRecord("posting-requested", id, PostingRequested.class);
     }
 
-    // (c) POSTING + not posted + age>fail -> FAILED(SAGA_TIMEOUT) + transfer-failed (money confirmed not moved)
+    // (c) POSTING + not posted + age>fail -> RE-DRIVEN, NOT failed. A `posted=false` snapshot does not
+    // prove money never moved (a still-in-flight posting-requested could post AFTER we'd have failed it),
+    // so the reconciler must NEVER auto-fail a POSTING transfer. It re-emits posting-requested and leaves
+    // the status POSTING — only accounts' authority (ledger-posted / posting-rejected) terminalizes money.
+    // This is the regression guard for the BANK-12 late-post-after-FAILED money-safety fix.
     @Test
-    void postingNotPostedPastFailTimesOut() {
+    void postingNotPostedPastFailIsReDrivenNotFailed() {
         String id = "rec-c-" + System.nanoTime();
         seed(id, "POSTING", 600); // > fail (5m)
         when(accountsPostingClient.posted(id)).thenReturn(Optional.of(false));
 
         reconciler.reconcileOne(load(id));
 
-        assertThat(statusOf(id)).isEqualTo("FAILED");
-        assertThat(jdbc.queryForObject("SELECT failure_reason FROM transfer WHERE id = ?", String.class, id))
-                .isEqualTo("SAGA_TIMEOUT");
-        TransferFailed ev = awaitRecord("transfer-failed", id, TransferFailed.class);
-        assertThat(ev.getReason().toString()).isEqualTo("SAGA_TIMEOUT");
+        // MUST NOT be failed: the reconciler may not fabricate a FAILED over money it cannot prove never moved.
+        assertThat(statusOf(id)).isEqualTo("POSTING");
+        awaitRecord("posting-requested", id, PostingRequested.class);
+    }
+
+    // (c2) POSTING + not posted + age>stuck-after -> emit acme.saga.stuck metric, status STILL POSTING.
+    // This is the "page a human" signal for money that's genuinely stuck (accounts permanently
+    // unreachable). State is NOT changed; re-drive also continues.
+    @Test
+    void postingNotPostedPastStuckThresholdEmitsStuckMetricButDoesNotFail() {
+        String id = "rec-c2-" + System.nanoTime();
+        seed(id, "POSTING", 1800); // > stuck-after (15m default)
+        when(accountsPostingClient.posted(id)).thenReturn(Optional.of(false));
+
+        double before = stuckCount();
+
+        reconciler.reconcileOne(load(id));
+
+        // Still POSTING — only accounts may terminalize money; the reconciler only surfaces it.
+        assertThat(statusOf(id)).isEqualTo("POSTING");
+        assertThat(stuckCount()).isEqualTo(before + 1.0);
+        // Re-drive continues even when stuck.
+        awaitRecord("posting-requested", id, PostingRequested.class);
+    }
+
+    private double stuckCount() {
+        io.micrometer.core.instrument.Counter c =
+                meterRegistry.find("acme.saga.stuck").tag("status", "POSTING").counter();
+        return c == null ? 0.0 : c.count();
     }
 
     // (d) REQUESTED + nudge<age<fail -> RE-EMIT transfer-requested

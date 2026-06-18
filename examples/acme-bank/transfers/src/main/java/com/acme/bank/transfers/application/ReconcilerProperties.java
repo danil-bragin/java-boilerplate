@@ -13,8 +13,15 @@ public class ReconcilerProperties {
     /** Age after which a stuck transfer is nudged (re-emit to re-drive). */
     private Duration nudgeAfter = Duration.ofSeconds(30);
 
-    /** Age after which a stuck transfer is hard-failed (POSTING only after a confirmed not-posted). */
+    /** Age after which a pre-money stuck transfer is hard-failed (SAGA_TIMEOUT). POSTING is never failed. */
     private Duration failAfter = Duration.ofMinutes(5);
+
+    /**
+     * Age after which a still-unposted POSTING transfer is treated as genuinely stuck: the reconciler
+     * emits the {@code acme.saga.stuck} metric + a WARN ("page a human") but never changes state. Should
+     * be ≥ {@link #failAfter}.
+     */
+    private Duration stuckAfter = Duration.ofMinutes(15);
 
     /** Max transfers reconciled per sweep. */
     private int batchSize = 100;
@@ -41,6 +48,14 @@ public class ReconcilerProperties {
 
     public void setFailAfter(Duration failAfter) {
         this.failAfter = failAfter;
+    }
+
+    public Duration getStuckAfter() {
+        return stuckAfter;
+    }
+
+    public void setStuckAfter(Duration stuckAfter) {
+        this.stuckAfter = stuckAfter;
     }
 
     public int getBatchSize() {
