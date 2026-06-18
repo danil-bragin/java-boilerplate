@@ -46,6 +46,64 @@ REST call
 
 ---
 
+## Self-healing / reconciliation (BANK-12)
+
+Choreography has no orchestrator, so a **lost event** (or a service down past its retries →
+DLT) would leave a transfer stuck in a non-terminal state forever. A scheduled, money-safe
+reconciler in `transfers` (`SagaReconciler`) closes that gap.
+
+**Single runner.** The sweep is `@Scheduled` + `@SchedulerLock(name="transfer-saga-reconciler")`
+(ShedLock over the transfers datasource), so exactly one replica runs a given tick. It finds
+non-terminal transfers (`REQUESTED`/`APPROVED`/`POSTING`) whose `updated_at` is older than
+`nudge-after`, and applies a **tiered, money-safe policy**:
+
+| State                  | Age                         | Action                                                                 |
+|------------------------|-----------------------------|------------------------------------------------------------------------|
+| `REQUESTED`            | `> nudge-after`             | re-emit `transfer-requested` (re-screen; idempotent)                   |
+| `APPROVED`             | `> nudge-after`             | re-emit `posting-requested` (re-drive the posting)                     |
+| `REQUESTED`/`APPROVED` | `> fail-after`              | `timeOut()` → `FAILED(SAGA_TIMEOUT)` + `transfer-failed` (pre-money — always safe) |
+| `POSTING` + posted     | any                         | `complete()` → `COMPLETED` + `transfer-completed` (recovers a lost `ledger-posted`) |
+| `POSTING` + not posted | `nudge-after < age < fail`  | re-emit `posting-requested` (idempotent at accounts)                   |
+| `POSTING` + not posted | `> fail-after`              | `fail(SAGA_TIMEOUT)` + `transfer-failed` (money confirmed not moved → safe) |
+| `POSTING` + **no answer** | any                      | **skip** — never fail money on a transport error                       |
+
+**The money truth.** `POSTING` is the one state where money may already have moved, so it is
+**never blindly timed out**. The reconciler asks accounts — the ledger is the source of truth —
+via `GET /internal/postings/{id}` → `{transferId, posted}` (`AccountsPostingClient`, resilience4j
+instance `accounts-reconcile`). The client returns `Optional<Boolean>`:
+
+- `true` → ledger posted; complete (a lost `ledger-posted` is recovered).
+- `false` and past `fail-after` → money confirmed not moved; fail with `SAGA_TIMEOUT`.
+- `empty` (5xx/timeout/open circuit) → **skip this round** — the transfer is left untouched.
+
+The `/internal/**` query is network-segmented: it is permitted without a bearer
+(`acme.security.permit-paths`) but is NOT exposed at the gateway edge (the gateway proxies only
+`/v1/**`) and accounts is not published to the host in compose — so it is reachable only on the
+service network.
+
+**Idempotent re-drive.** Re-emitting a domain event creates a fresh outbox publication → a new
+Kafka message. This is safe because every consumer is **inbox-deduped** and the posting is
+**PK-anchored** (BANK-11), so a redelivery never double-screens or double-posts.
+
+**Thresholds** (`acme.bank.reconciler.*`, env-overridable): `nudge-after` (default `PT30S`),
+`fail-after` (default `PT5M`), `fixed-delay` (default `PT15S`), `batch-size` (`100`), `enabled`.
+
+**DLT alerting.** The reconciler handles *silent hangs* (lost events). The complementary
+*poison* path — a message that fails past retries and is routed to `<topic>-dlt` — increments a
+Micrometer counter **`acme.saga.dlt`** (tagged by source topic) with a WARN log, at the
+starter-level `DeadLetterPublishingRecoverer` (`acme-messaging`). Together they cover both
+failure modes.
+
+**Strong + eventual together.** BANK-11 makes the money mutation **strongly consistent** (the
+posting is one ACID transaction with a pessimistic source lock — no overdraft). BANK-12 makes the
+*coordination* **self-converging** without ever contradicting that money truth. The result is a
+saga that is both money-correct and guaranteed to reach a terminal state.
+
+See `EventuallyConsistent` (acme-cqrs) — the sibling of `StronglyConsistent` — which documents a
+flow whose effects converge asynchronously (outbox/inbox + reconciliation, no surrounding tx).
+
+---
+
 ## Services
 
 ### transfers
