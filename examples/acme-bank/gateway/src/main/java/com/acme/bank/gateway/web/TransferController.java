@@ -70,19 +70,27 @@ public class TransferController implements TransfersApi {
     }
 
     private TransferView toDto(com.acme.bank.gateway.projection.TransferView view) {
-        com.acme.money.Money money = view.amount().toMoney(assetLookup);
-        String value = view.amount()
-                .getAmount()
-                .setScale(money.asset().scale(), java.math.RoundingMode.HALF_EVEN)
-                .toPlainString();
+        // Facts (amount/accounts/createdAt) may be null for a row seeded by a terminal event that
+        // arrived before TransferRequested replayed. Render them as absent rather than NPE'ing.
+        Money money = null;
+        if (view.amount() != null) {
+            com.acme.money.Money resolved = view.amount().toMoney(assetLookup);
+            String value = view.amount()
+                    .getAmount()
+                    .setScale(resolved.asset().scale(), java.math.RoundingMode.HALF_EVEN)
+                    .toPlainString();
+            money = new Money(value, resolved.asset().code());
+        }
         TransferView dto = new TransferView(
                 view.transferId(),
                 TransferView.StatusEnum.fromValue(view.status()),
-                new Money(value, money.asset().code()),
+                money,
                 view.sourceAccountId(),
                 view.destinationAccountId());
         dto.setFailureReason(view.failureReason());
-        dto.setCreatedAt(OffsetDateTime.ofInstant(view.createdAt(), ZoneOffset.UTC));
+        if (view.createdAt() != null) {
+            dto.setCreatedAt(OffsetDateTime.ofInstant(view.createdAt(), ZoneOffset.UTC));
+        }
         dto.setUpdatedAt(OffsetDateTime.ofInstant(view.updatedAt(), ZoneOffset.UTC));
         return dto;
     }

@@ -110,6 +110,58 @@ class TransferProjectionIT {
         assertThat(inbox).isEqualTo(1L);
     }
 
+    @Test
+    void terminalEventBeforeRequestedIsRetained() {
+        String bootstrap = redpanda.getBootstrapServers().replaceFirst(".*://", "");
+        String srUrl = redpanda.getSchemaRegistryAddress();
+
+        String transferId = "proj-it-terminal-first";
+        Money amount = Money.of("777.00", Assets.USD);
+
+        try (Producer<String, Object> producer = newProducer(bootstrap, srUrl)) {
+            // Terminal event arrives BEFORE the requested row exists (cold-start replay / live race).
+            // The projection must create-or-update so the COMPLETED status is retained, not dropped.
+            Awaitility.await().atMost(Duration.ofSeconds(60)).untilAsserted(() -> {
+                producer.send(new ProducerRecord<>("transfer-completed", transferId, completed(transferId)));
+                producer.flush();
+                assertThat(currentStatus(transferId)).isEqualTo("COMPLETED");
+            });
+
+            // Now REQUESTED (lowest rank) replays. Status must NOT regress, but facts must be filled.
+            Awaitility.await().atMost(Duration.ofSeconds(60)).untilAsserted(() -> {
+                producer.send(new ProducerRecord<>("transfer-requested", transferId, requested(transferId, amount)));
+                producer.flush();
+                assertThat(currentFacts(transferId)).isNotNull();
+            });
+        }
+
+        // Status stays COMPLETED (no regress); facts now populated from the REQUESTED event.
+        Awaitility.await()
+                .during(Duration.ofSeconds(2))
+                .atMost(Duration.ofSeconds(10))
+                .untilAsserted(() -> assertThat(currentStatus(transferId)).isEqualTo("COMPLETED"));
+
+        BigDecimal value = jdbc.queryForObject(
+                "SELECT amount_value FROM transfer_view WHERE transfer_id = ?", BigDecimal.class, transferId);
+        assertThat(value).isEqualByComparingTo("777.00");
+        String asset = jdbc.queryForObject(
+                "SELECT amount_asset FROM transfer_view WHERE transfer_id = ?", String.class, transferId);
+        assertThat(asset).isEqualTo("USD");
+        String src = jdbc.queryForObject(
+                "SELECT source_account_id FROM transfer_view WHERE transfer_id = ?", String.class, transferId);
+        assertThat(src).isEqualTo("acc-src");
+        String dst = jdbc.queryForObject(
+                "SELECT destination_account_id FROM transfer_view WHERE transfer_id = ?", String.class, transferId);
+        assertThat(dst).isEqualTo("acc-dst");
+    }
+
+    private String currentFacts(String transferId) {
+        return jdbc.query(
+                "SELECT source_account_id FROM transfer_view WHERE transfer_id = ?",
+                rs -> rs.next() ? rs.getString(1) : null,
+                transferId);
+    }
+
     private String currentStatus(String transferId) {
         return jdbc.query(
                 "SELECT status FROM transfer_view WHERE transfer_id = ?",

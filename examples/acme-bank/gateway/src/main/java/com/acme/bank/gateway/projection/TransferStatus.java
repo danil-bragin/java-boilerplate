@@ -7,6 +7,9 @@ package com.acme.bank.gateway.projection;
  */
 public enum TransferStatus {
     REQUESTED(0),
+    // SCREENING and POSTING ranks are reserved for future intermediate-status producers; the gateway
+    // projection currently emits REQUESTED -> APPROVED -> COMPLETED/FAILED. Kept because the OpenAPI
+    // contract enum lists them.
     SCREENING(1),
     APPROVED(2),
     POSTING(3),

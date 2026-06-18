@@ -2,12 +2,14 @@ CREATE TABLE transfer_view (
     transfer_id            VARCHAR(64) PRIMARY KEY,
     status                 VARCHAR(32) NOT NULL,
     status_rank            INT NOT NULL,
-    amount_value           NUMERIC(38,18) NOT NULL,
-    amount_asset           VARCHAR(16) NOT NULL,
-    source_account_id      VARCHAR(64) NOT NULL,
-    destination_account_id VARCHAR(64) NOT NULL,
+    -- Facts (amount/accounts/created_at) are carried only by TransferRequested. A terminal event
+    -- consumed before TransferRequested seeds the row with these NULL until REQUESTED replays.
+    amount_value           NUMERIC(38,18),
+    amount_asset           VARCHAR(16),
+    source_account_id      VARCHAR(64),
+    destination_account_id VARCHAR(64),
     failure_reason         VARCHAR(64),
-    created_at             TIMESTAMPTZ NOT NULL,
+    created_at             TIMESTAMPTZ,
     updated_at             TIMESTAMPTZ NOT NULL
 );
 

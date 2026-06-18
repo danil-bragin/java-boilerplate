@@ -40,18 +40,19 @@ public class TransferStatusProjection {
             return;
         }
         Instant now = Instant.now();
-        if (repository.existsById(transferId)) {
-            return;
-        }
         MoneyAmount amount = MoneyAmount.from(MoneyMapper.fromAvro(event.getAmount()));
-        TransferView view = new TransferView(
-                transferId,
-                TransferStatus.REQUESTED,
+        TransferView row = repository
+                .findById(transferId)
+                .orElseGet(() -> TransferView.seed(transferId, TransferStatus.REQUESTED, 0, now));
+        // Facts come only from TransferRequested; apply them even if a terminal event already created
+        // the row. REQUESTED is the lowest rank, so advanceTo won't regress an already-terminal row.
+        row.applyFacts(
                 amount,
                 event.getSourceAccountId().toString(),
                 event.getDestinationAccountId().toString(),
-                now);
-        repository.save(view);
+                event.getRequestedAt());
+        row.advanceTo(TransferStatus.REQUESTED, null, now);
+        repository.save(row);
     }
 
     @KafkaListener(topics = "transfer-screened", groupId = "gateway-projection-screened")
@@ -88,7 +89,16 @@ public class TransferStatusProjection {
         advance(transferId, TransferStatus.FAILED, event.getReason().toString());
     }
 
+    /**
+     * Create-or-update: a terminal/screened event for a transfer whose {@code TransferRequested} has
+     * not arrived yet CREATES the row (with null facts) instead of being dropped. The rank guard in
+     * {@link TransferView#advanceTo} keeps the status monotonic.
+     */
     private void advance(String transferId, TransferStatus next, String failureReason) {
-        repository.findById(transferId).ifPresent(view -> view.advanceTo(next, failureReason, Instant.now()));
+        Instant now = Instant.now();
+        TransferView row =
+                repository.findById(transferId).orElseGet(() -> TransferView.seed(transferId, next, next.rank(), now));
+        row.advanceTo(next, failureReason, now);
+        repository.save(row);
     }
 }
