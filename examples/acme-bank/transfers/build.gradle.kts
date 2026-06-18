@@ -9,6 +9,7 @@ dependencies {
     implementation(project(":starters:acme-persistence-spring-boot-starter"))
     implementation(project(":starters:acme-cqrs-spring-boot-starter"))
     implementation(project(":starters:acme-outbox-spring-boot-starter"))
+    implementation(project(":starters:acme-messaging-spring-boot-starter"))
     implementation(project(":starters:acme-web-spring-boot-starter"))
     implementation(project(":starters:acme-ratelimit-spring-boot-starter"))
     implementation(project(":starters:acme-security-spring-boot-starter"))

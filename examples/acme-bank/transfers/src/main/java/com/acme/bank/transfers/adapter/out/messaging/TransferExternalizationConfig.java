@@ -1,21 +1,38 @@
 package com.acme.bank.transfers.adapter.out.messaging;
 
+import com.acme.bank.transfers.domain.PostingRequestedEvent;
+import com.acme.bank.transfers.domain.TransferCompletedEvent;
+import com.acme.bank.transfers.domain.TransferFailedEvent;
 import com.acme.bank.transfers.domain.TransferRequested;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.modulith.events.EventExternalizationConfiguration;
 import org.springframework.modulith.events.RoutingTarget;
 
-/** Maps the domain {@code TransferRequested} to the Avro contract and routes it to the {@code transfer-requested} topic. */
+/**
+ * Maps all transfer domain events to their Avro contracts and routes them to the appropriate topics.
+ */
 @Configuration
 class TransferExternalizationConfig {
 
     @Bean
     EventExternalizationConfiguration eventExternalizationConfiguration() {
         return EventExternalizationConfiguration.externalizing()
-                .select(event -> event instanceof TransferRequested)
+                .select(event -> event instanceof TransferRequested
+                        || event instanceof PostingRequestedEvent
+                        || event instanceof TransferCompletedEvent
+                        || event instanceof TransferFailedEvent)
                 .mapping(TransferRequested.class, TransferAvroMapper::toAvro)
+                .mapping(PostingRequestedEvent.class, TransferAvroMapper::toAvro)
+                .mapping(TransferCompletedEvent.class, TransferAvroMapper::toAvro)
+                .mapping(TransferFailedEvent.class, TransferAvroMapper::toAvro)
                 .route(TransferRequested.class, event -> RoutingTarget.forTarget("transfer-requested")
+                        .andKey(event.transferId()))
+                .route(PostingRequestedEvent.class, event -> RoutingTarget.forTarget("posting-requested")
+                        .andKey(event.transferId()))
+                .route(TransferCompletedEvent.class, event -> RoutingTarget.forTarget("transfer-completed")
+                        .andKey(event.transferId()))
+                .route(TransferFailedEvent.class, event -> RoutingTarget.forTarget("transfer-failed")
                         .andKey(event.transferId()))
                 .build();
     }

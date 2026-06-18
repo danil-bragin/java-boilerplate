@@ -2,6 +2,7 @@ package com.acme.bank.transfers.adapter.out.persistence;
 
 import com.acme.bank.transfers.domain.Transfer;
 import com.acme.bank.transfers.domain.TransferId;
+import com.acme.bank.transfers.domain.TransferStatus;
 import com.acme.bank.transfers.domain.Transfers;
 import com.acme.money.Assets;
 import com.acme.persistence.MoneyAmount;
@@ -40,13 +41,13 @@ class JpaTransfers implements Transfers {
     }
 
     private Transfer rehydrate(TransferJpaEntity e) {
-        // For BANK-2 only the REQUESTED path is exercised; rehydration of later states is added in BANK-5.
-        Transfer t = Transfer.request(
+        return Transfer.rehydrate(
                 new TransferId(e.getId()),
                 e.getSourceAccountId(),
                 e.getDestinationAccountId(),
                 e.getAmount().toMoney(Assets::of),
-                e.getRequestedBy());
-        return t;
+                e.getRequestedBy(),
+                TransferStatus.valueOf(e.getStatus()),
+                e.getFailureReason());
     }
 }

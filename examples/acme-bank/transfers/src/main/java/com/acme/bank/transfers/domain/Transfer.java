@@ -36,6 +36,23 @@ public class Transfer {
         return new Transfer(id, source, destination, amount, requestedBy, TransferStatus.REQUESTED);
     }
 
+    /**
+     * Reconstructs a {@code Transfer} from its persisted state. Used by the JPA adapter to rehydrate
+     * aggregates that have already advanced past {@code REQUESTED}.
+     */
+    public static Transfer rehydrate(
+            TransferId id,
+            String source,
+            String destination,
+            Money amount,
+            String requestedBy,
+            TransferStatus status,
+            String failureReason) {
+        Transfer t = new Transfer(id, source, destination, amount, requestedBy, status);
+        t.failureReason = failureReason;
+        return t;
+    }
+
     public TransferRequested toRequestedEvent() {
         return new TransferRequested(id.value(), sourceAccountId, destinationAccountId, amount, requestedBy);
     }

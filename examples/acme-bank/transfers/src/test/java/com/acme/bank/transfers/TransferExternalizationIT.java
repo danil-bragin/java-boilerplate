@@ -48,11 +48,15 @@ class TransferExternalizationIT {
 
     @TestConfiguration
     static class SchemaRegistryProps {
-        // Point the app's KafkaAvroSerializer + this test consumer at the Redpanda Schema Registry.
+        // Point the app's KafkaAvroSerializer + KafkaAvroDeserializer at the Redpanda Schema Registry.
         @Bean
         DynamicPropertyRegistrar schemaRegistry(RedpandaContainer redpanda) {
-            return registry -> registry.add(
-                    "spring.kafka.producer.properties.schema.registry.url", redpanda::getSchemaRegistryAddress);
+            return registry -> {
+                registry.add(
+                        "spring.kafka.producer.properties.schema.registry.url", redpanda::getSchemaRegistryAddress);
+                registry.add(
+                        "spring.kafka.consumer.properties.schema.registry.url", redpanda::getSchemaRegistryAddress);
+            };
         }
     }
 
