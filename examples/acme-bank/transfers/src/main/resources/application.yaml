@@ -20,6 +20,12 @@ spring:
       observation-enabled: true
     listener:
       observation-enabled: true
+      # BANK-16: consume the result topics (transfer-screened, ledger-posted, posting-rejected) partitions
+      # in PARALLEL — one thread per partition — so different transfers advance concurrently. Within a
+      # partition it stays single-threaded: a transfer's events serialize on ONE thread, and keying by
+      # transferId preserves per-transfer order and the inbox-dedup guarantee. Concurrency ≤ partition
+      # count (6). The BANK-1 posting anchor / saga state machine remain the correctness backstops.
+      concurrency: ${TRANSFERS_LISTENER_CONCURRENCY:6}
     consumer:
       group-id: transfers
       auto-offset-reset: earliest

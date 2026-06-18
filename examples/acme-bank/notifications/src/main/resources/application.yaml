@@ -17,6 +17,12 @@ spring:
     # micrometer-tracing-bridge-otel (from the observability starter).
     listener:
       observation-enabled: true
+      # BANK-16: consume transfer-completed / transfer-failed partitions in PARALLEL — one thread per
+      # partition — so notifications for different transfers are created concurrently. Within a partition it
+      # stays single-threaded: a transfer's terminal event serializes on ONE thread, and keying by
+      # transferId preserves per-transfer order and the inbox-dedup guarantee. Concurrency ≤ partition
+      # count (6).
+      concurrency: ${NOTIFICATIONS_LISTENER_CONCURRENCY:6}
     consumer:
       group-id: notifications
       auto-offset-reset: earliest

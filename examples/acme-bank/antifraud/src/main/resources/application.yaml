@@ -19,6 +19,11 @@ spring:
       observation-enabled: true
     listener:
       observation-enabled: true
+      # BANK-16: consume transfer-requested partitions in PARALLEL — one thread per partition — so
+      # different transfers are screened concurrently. Within a partition it stays single-threaded: a
+      # transfer's events serialize on ONE thread, and keying by transferId preserves per-transfer order
+      # and the inbox-dedup guarantee. Concurrency ≤ partition count (6).
+      concurrency: ${ANTIFRAUD_LISTENER_CONCURRENCY:6}
     consumer:
       group-id: antifraud
       auto-offset-reset: earliest

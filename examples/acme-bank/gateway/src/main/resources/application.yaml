@@ -19,6 +19,12 @@ spring:
       observation-enabled: true
     listener:
       observation-enabled: true
+      # BANK-16: each of the four projection listeners (transfer-requested/screened/completed/failed) consumes
+      # its topic's partitions in PARALLEL — one thread per partition — so the read model updates for different
+      # transfers concurrently. Within a partition it stays single-threaded: a transfer's events serialize on
+      # ONE thread, and keying by transferId preserves per-transfer projection order. Concurrency ≤ partition
+      # count (6). auto-offset-reset stays earliest (the projection rebuilds from the log).
+      concurrency: ${GATEWAY_LISTENER_CONCURRENCY:6}
     consumer:
       group-id: gateway
       auto-offset-reset: earliest
