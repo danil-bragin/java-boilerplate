@@ -34,6 +34,11 @@ spring:
       value-deserializer: io.confluent.kafka.serializers.KafkaAvroDeserializer
       properties:
         specific.avro.reader: true
+        # BANK-15: never silently consume an auto-created 1-partition topic. accounts' own KafkaAdmin
+        # provisions/grows posting-requested to 6 partitions at context refresh (SagaTopicsConfig),
+        # BEFORE this listener subscribes — so a missing topic here is a loud error, not a 1-partition
+        # funnel that would collapse per-account write parallelism onto one consumer thread.
+        allow.auto.create.topics: false
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: io.confluent.kafka.serializers.KafkaAvroSerializer
@@ -52,6 +57,13 @@ spring:
           issuer-uri: ${OAUTH2_ISSUER_URI:http://localhost:8082/realms/bank}
 
 acme:
+  bank:
+    topics:
+      posting-requested:
+        # BANK-15: accounts (the CONSUMER) self-provisions posting-requested at this partition count so
+        # per-account write parallelism is deterministic regardless of start order or whether transfers
+        # is up — KafkaAdmin create-or-modify is idempotent, so both services declaring it is fine.
+        partitions: ${POSTING_REQUESTED_PARTITIONS:6}
   security:
     # Permit the network-internal, service-to-service surface without a bearer. `/internal/**` is
     # NOT exposed at the gateway edge (the gateway proxies only `/v1/**`) and accounts is not
