@@ -38,6 +38,11 @@ public class PostTransferHandler implements Command.Handler<PostTransferCommand,
             return PostTransferResult.rejected(command.transferId(), "ACCOUNT_NOT_OPERATIONAL");
         }
 
+        // Per-account single-asset invariant: both legs must transact in their account's own currency.
+        if (!source.asset().equals(amount.asset()) || !dest.asset().equals(amount.asset())) {
+            return PostTransferResult.rejected(command.transferId(), "ACCOUNT_ASSET_MISMATCH");
+        }
+
         Money balance = ledger.balance(sourceId, amount.asset());
         if (balance.compareTo(amount) < 0) {
             return PostTransferResult.rejected(command.transferId(), "INSUFFICIENT_FUNDS");

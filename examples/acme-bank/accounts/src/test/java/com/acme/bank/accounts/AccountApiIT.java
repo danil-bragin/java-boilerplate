@@ -87,6 +87,28 @@ class AccountApiIT {
     }
 
     @Test
+    void balanceOfNoDepositAccountUsesAccountAsset() throws Exception {
+        // Open an EUR account with NO opening deposit (no ledger entries to derive an asset from).
+        String openEur = "{\"ownerName\":\"Marie\",\"asset\":\"EUR\"}";
+        String body = mvc.perform(post("/v1/accounts")
+                        .with(jwt())
+                        .header("Idempotency-Key", "open-eur-" + System.nanoTime())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(openEur))
+                .andExpect(status().isCreated())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        String id = mapper.readTree(body).get("accountId").asText();
+
+        // Balance must be 0 in the account's real currency (EUR), not the hardcoded-USD fallback.
+        mvc.perform(get("/v1/accounts/{id}/balance", id).with(jwt()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.value").value("0.00"))
+                .andExpect(jsonPath("$.asset").value("EUR"));
+    }
+
+    @Test
     void freezesAccount() throws Exception {
         String id = openAccount();
         mvc.perform(post("/v1/accounts/{id}/freeze", id).with(jwt())).andExpect(status().isOk());

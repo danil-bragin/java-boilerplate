@@ -19,8 +19,8 @@ public interface Ledger {
 
     /**
      * Derived balance for an account without naming the asset up front: resolves the account's asset
-     * from its own entries (one asset per account in this model) and sums them. Returns zero in the
-     * account's asset, or zero USD if the account has no entries yet.
+     * from the ACCOUNT itself (one asset per account in this model) and sums its entries. A no-deposit
+     * account therefore reports zero in its own currency, never a ledger-derived guess.
      */
     Money balanceOf(AccountId accountId);
 

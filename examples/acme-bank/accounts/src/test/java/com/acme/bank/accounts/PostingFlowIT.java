@@ -67,7 +67,7 @@ class PostingFlowIT {
 
     private void openAccount(String id) {
         jdbc.update(
-                "INSERT INTO account(id, iban, status) VALUES (?, ?, 'OPEN') ON CONFLICT (id) DO NOTHING",
+                "INSERT INTO account(id, iban, status, asset) VALUES (?, ?, 'OPEN', 'USD') ON CONFLICT (id) DO NOTHING",
                 id,
                 "IBAN-" + id);
     }

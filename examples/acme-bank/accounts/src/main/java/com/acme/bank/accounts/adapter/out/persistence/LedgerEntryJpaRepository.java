@@ -18,10 +18,6 @@ interface LedgerEntryJpaRepository extends JpaRepository<LedgerEntryJpaEntity, L
 
     List<LedgerEntryJpaEntity> findByTransferId(String transferId);
 
-    /** Resolve the (single) asset an account transacts in; null if it has no entries yet. */
-    @Query("select min(e.amount.asset) from LedgerEntryJpaEntity e where e.accountId = :accountId")
-    String assetOf(@Param("accountId") String accountId);
-
     /** Sum of an account's entries strictly before {@code at} (page opening balance). */
     @Query("select coalesce(sum(e.amount.amount), 0) from LedgerEntryJpaEntity e "
             + "where e.accountId = :accountId and e.amount.asset = :asset and e.postedAt < :at")

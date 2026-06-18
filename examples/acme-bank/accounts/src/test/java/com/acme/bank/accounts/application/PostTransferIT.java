@@ -23,7 +23,11 @@ class PostTransferIT {
     JdbcTemplate jdbc;
 
     private void openAccount(String id) {
-        jdbc.update("INSERT INTO account(id, iban, status) VALUES (?, ?, 'OPEN')", id, "IBAN-" + id);
+        openAccount(id, "USD");
+    }
+
+    private void openAccount(String id, String asset) {
+        jdbc.update("INSERT INTO account(id, iban, status, asset) VALUES (?, ?, 'OPEN', ?)", id, "IBAN-" + id, asset);
     }
 
     private void seedBalance(String accountId, String amount) {
@@ -76,7 +80,8 @@ class PostTransferIT {
 
     @Test
     void rejectsPostingFromNonOperationalAccountWithoutMovingMoney() {
-        jdbc.update("INSERT INTO account(id, iban, status) VALUES (?, ?, 'FROZEN')", "frozen", "IBAN-frozen");
+        jdbc.update(
+                "INSERT INTO account(id, iban, status, asset) VALUES (?, ?, 'FROZEN', 'USD')", "frozen", "IBAN-frozen");
         openAccount("dst-op");
         seedBalance("frozen", "500.00");
 
@@ -86,6 +91,23 @@ class PostTransferIT {
 
         assertThat(result.posted()).isFalse();
         assertThat(result.reason()).isEqualTo("ACCOUNT_NOT_OPERATIONAL");
+        long after = jdbc.queryForObject("SELECT count(*) FROM ledger_entry", Long.class);
+        assertThat(after).isEqualTo(before);
+    }
+
+    @Test
+    void postingWithMismatchedAssetIsRejected() {
+        // dst is a EUR account; transferring USD into it must be rejected, not silently summed.
+        openAccount("src-usd", "USD");
+        openAccount("dst-eur", "EUR");
+        seedBalance("src-usd", "500.00");
+
+        long before = jdbc.queryForObject("SELECT count(*) FROM ledger_entry", Long.class);
+        PostTransferResult result = pipeline.send(
+                new PostTransferCommand("t-mismatch", "src-usd", "dst-eur", Money.of("50.00", Assets.USD)));
+
+        assertThat(result.posted()).isFalse();
+        assertThat(result.reason()).isEqualTo("ACCOUNT_ASSET_MISMATCH");
         long after = jdbc.queryForObject("SELECT count(*) FROM ledger_entry", Long.class);
         assertThat(after).isEqualTo(before);
     }

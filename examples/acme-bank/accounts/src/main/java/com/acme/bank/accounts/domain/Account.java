@@ -1,5 +1,6 @@
 package com.acme.bank.accounts.domain;
 
+import com.acme.money.Asset;
 import java.util.Objects;
 import org.jmolecules.ddd.annotation.AggregateRoot;
 import org.jmolecules.ddd.annotation.Identity;
@@ -11,15 +12,17 @@ public class Account {
     private final AccountId id;
 
     private final Iban iban;
+    private final Asset asset;
     private AccountStatus status;
 
-    public Account(AccountId id, Iban iban) {
-        this(id, iban, AccountStatus.OPEN);
+    public Account(AccountId id, Iban iban, Asset asset) {
+        this(id, iban, asset, AccountStatus.OPEN);
     }
 
-    public Account(AccountId id, Iban iban, AccountStatus status) {
+    public Account(AccountId id, Iban iban, Asset asset, AccountStatus status) {
         this.id = Objects.requireNonNull(id, "id");
         this.iban = Objects.requireNonNull(iban, "iban");
+        this.asset = Objects.requireNonNull(asset, "asset");
         this.status = Objects.requireNonNull(status, "status");
     }
 
@@ -29,6 +32,11 @@ public class Account {
 
     public Iban iban() {
         return iban;
+    }
+
+    /** The single currency this account transacts in. Every entry posted to it must match. */
+    public Asset asset() {
+        return asset;
     }
 
     public AccountStatus status() {

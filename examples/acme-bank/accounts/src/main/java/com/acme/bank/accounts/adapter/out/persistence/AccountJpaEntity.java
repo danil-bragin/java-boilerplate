@@ -19,12 +19,16 @@ class AccountJpaEntity {
     @Column(name = "status", nullable = false)
     private String status;
 
+    @Column(name = "asset", nullable = false)
+    private String asset;
+
     protected AccountJpaEntity() {}
 
-    AccountJpaEntity(String id, String iban, String status) {
+    AccountJpaEntity(String id, String iban, String status, String asset) {
         this.id = id;
         this.iban = iban;
         this.status = status;
+        this.asset = asset;
     }
 
     String getId() {
@@ -37,5 +41,9 @@ class AccountJpaEntity {
 
     String getStatus() {
         return status;
+    }
+
+    String getAsset() {
+        return asset;
     }
 }

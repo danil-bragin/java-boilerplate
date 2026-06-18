@@ -1,6 +1,9 @@
 package com.acme.bank.accounts.adapter.out.persistence;
 
+import com.acme.bank.accounts.domain.AccountAssetMismatchException;
 import com.acme.bank.accounts.domain.AccountId;
+import com.acme.bank.accounts.domain.AccountNotFoundException;
+import com.acme.bank.accounts.domain.Accounts;
 import com.acme.bank.accounts.domain.Ledger;
 import com.acme.bank.accounts.domain.LedgerEntry;
 import com.acme.bank.accounts.domain.Posting;
@@ -22,14 +25,25 @@ class JpaLedger implements Ledger {
 
     private final LedgerEntryJpaRepository entries;
     private final PostingJpaRepository postings;
+    private final Accounts accounts;
 
-    JpaLedger(LedgerEntryJpaRepository entries, PostingJpaRepository postings) {
+    JpaLedger(LedgerEntryJpaRepository entries, PostingJpaRepository postings, Accounts accounts) {
         this.entries = entries;
         this.postings = postings;
+        this.accounts = accounts;
     }
 
     @Override
     public void save(Posting posting) {
+        // Per-account single-asset invariant: every entry's asset must match its account's established
+        // asset. bank-equity is USD; opening deposits are same-asset as the account by construction.
+        for (LedgerEntry entry : posting.entries()) {
+            Asset accountAsset = accountAssetOf(entry.accountId());
+            if (!entry.amount().asset().equals(accountAsset)) {
+                throw new AccountAssetMismatchException(
+                        entry.accountId(), accountAsset, entry.amount().asset());
+            }
+        }
         // Insert the idempotency anchor first and flush so a concurrent duplicate fails the PK here
         // (throwing DataIntegrityViolationException) and rolls back before any entries are written.
         postings.saveAndFlush(new PostingJpaEntity(posting.transferId()));
@@ -53,13 +67,13 @@ class JpaLedger implements Ledger {
 
     @Override
     public Money balanceOf(AccountId accountId) {
-        Asset asset = assetOf(accountId);
+        Asset asset = accountAssetOf(accountId);
         return balance(accountId, asset);
     }
 
     @Override
     public Money balanceBefore(AccountId accountId, Instant at) {
-        Asset asset = assetOf(accountId);
+        Asset asset = accountAssetOf(accountId);
         BigDecimal sum = entries.sumAmountBefore(accountId.value(), asset.code(), at);
         return Money.of(sum.toPlainString(), asset);
     }
@@ -88,8 +102,13 @@ class JpaLedger implements Ledger {
         return result;
     }
 
-    private Asset assetOf(AccountId accountId) {
-        String code = entries.assetOf(accountId.value());
-        return code == null ? Assets.USD : Assets.of(code);
+    /**
+     * The account's established asset, resolved from the ACCOUNT row (not from {@code min(entries)}).
+     * A no-deposit account therefore still reports its real currency.
+     */
+    private Asset accountAssetOf(AccountId accountId) {
+        return accounts.findById(accountId)
+                .orElseThrow(() -> new AccountNotFoundException(accountId))
+                .asset();
     }
 }

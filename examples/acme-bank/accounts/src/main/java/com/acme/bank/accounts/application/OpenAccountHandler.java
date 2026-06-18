@@ -51,7 +51,7 @@ public class OpenAccountHandler implements Command.Handler<OpenAccountCommand, O
 
         AccountId accountId = new AccountId(UUID.randomUUID().toString());
         Iban iban = Iban.forAccount(accountId);
-        Account account = new Account(accountId, iban);
+        Account account = new Account(accountId, iban, command.asset());
         accounts.save(account);
         // Anchor the open on the request id (flush -> PK guard against a concurrent double-open).
         openRequests.record(command.requestId(), accountId);

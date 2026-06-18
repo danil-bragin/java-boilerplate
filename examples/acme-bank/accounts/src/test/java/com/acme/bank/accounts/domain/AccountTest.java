@@ -19,13 +19,14 @@ class AccountTest {
 
     @Test
     void openAccountIsActive() {
-        Account account = new Account(new AccountId("acc-1"), new Iban("DE89370400440532013000"));
+        Account account =
+                new Account(new AccountId("acc-1"), new Iban("DE89370400440532013000"), com.acme.money.Assets.USD);
         assertThat(account.status()).isEqualTo(AccountStatus.OPEN);
         assertThat(account.isOperational()).isTrue();
     }
 
     private Account open() {
-        return new Account(new AccountId("acc-1"), new Iban("DE89370400440532013000"));
+        return new Account(new AccountId("acc-1"), new Iban("DE89370400440532013000"), com.acme.money.Assets.USD);
     }
 
     @Test
@@ -61,19 +62,31 @@ class AccountTest {
 
     @Test
     void closedAccountIsNotOperational() {
-        Account account = new Account(new AccountId("acc-1"), new Iban("DE89370400440532013000"), AccountStatus.CLOSED);
+        Account account = new Account(
+                new AccountId("acc-1"),
+                new Iban("DE89370400440532013000"),
+                com.acme.money.Assets.USD,
+                AccountStatus.CLOSED);
         assertThat(account.isOperational()).isFalse();
     }
 
     @Test
     void frozenAccountIsNotOperational() {
-        Account account = new Account(new AccountId("acc-1"), new Iban("DE89370400440532013000"), AccountStatus.FROZEN);
+        Account account = new Account(
+                new AccountId("acc-1"),
+                new Iban("DE89370400440532013000"),
+                com.acme.money.Assets.USD,
+                AccountStatus.FROZEN);
         assertThat(account.isOperational()).isFalse();
     }
 
     @Test
     void reconstructionPreservesStatus() {
-        Account account = new Account(new AccountId("acc-1"), new Iban("DE89370400440532013000"), AccountStatus.FROZEN);
+        Account account = new Account(
+                new AccountId("acc-1"),
+                new Iban("DE89370400440532013000"),
+                com.acme.money.Assets.USD,
+                AccountStatus.FROZEN);
         assertThat(account.status()).isEqualTo(AccountStatus.FROZEN);
     }
 }
