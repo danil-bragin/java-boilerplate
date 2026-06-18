@@ -10,7 +10,10 @@ import io.confluent.kafka.serializers.KafkaAvroSerializer;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import org.apache.kafka.clients.admin.Admin;
+import org.apache.kafka.clients.admin.AdminClientConfig;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerConfig;
@@ -28,21 +31,30 @@ import org.springframework.test.context.DynamicPropertyRegistrar;
 import org.testcontainers.redpanda.RedpandaContainer;
 
 /**
- * BANK-15 rebalance-proxy / single-writer-per-account safety. Produces N {@code posting-requested}
- * records for the SAME source account but DISTINCT transferIds, against a multi-partition topic with
- * the accounts listener running at concurrency ≥ 2. Because they share the source-account KEY they all
- * hash to ONE partition → ONE consumer thread (the single-writer lane), so the account's read-modify-write
- * balance check serializes and the source can NEVER overdraw.
+ * BANK-15 end-to-end over Kafka on the REAL 6-partition {@code posting-requested} topic. accounts'
+ * own {@code SagaTopicsConfig} {@code NewTopic} bean is present in this context, so accounts'
+ * {@code KafkaAdmin} provisions/grows the topic to 6 partitions at context refresh — BEFORE the
+ * listener subscribes. {@link #topicIsProvisionedWithSixPartitions()} asserts this directly via
+ * {@code describeTopics}, so the other cases genuinely exercise a multi-partition topic (not a
+ * 1-partition auto-created funnel — auto-create is disabled in {@code application.yaml}).
  *
- * <p>Funding covers exactly K of the N transfers, so the assertion is the single-writer OUTCOME:
- * exactly K post, the remaining N-K are rejected INSUFFICIENT_FUNDS, the source balance lands at 0
- * (never negative), and every posted transfer is Σ=0.
+ * <p>{@link #sameAccountConcurrentPostingsNeverOverdraw()} is the single-writer-per-account case:
+ * produces N records for the SAME source account but DISTINCT transferIds, against the 6-partition
+ * topic with the listener at concurrency ≥ 2. Because they share the source-account KEY they all hash
+ * to ONE partition → ONE consumer thread (the single-writer lane), so the account's
+ * read-modify-write balance check serializes and the source can NEVER overdraw. Funding covers exactly
+ * K of N, so the assertion is the single-writer OUTCOME: exactly K post, N-K are rejected
+ * INSUFFICIENT_FUNDS, the source lands at 0 (never negative), every posted transfer is Σ=0. Even if a
+ * transient rebalance briefly put two consumer threads on the one partition, the retained BANK-11
+ * pessimistic source lock + BANK-1 posting-PK anchor would still serialize the writers — proved
+ * directly by the 8-thread {@code ConcurrentDebitIT}.
  *
- * <p>This also closes the rebalance edge: even if a transient rebalance briefly put two consumer
- * threads on the one partition, the retained BANK-11 pessimistic source lock + BANK-1 posting-PK anchor
- * would still serialize the writers and prevent an overdraft — that exact two-writer contention is
- * proved directly by the 8-thread {@code ConcurrentDebitIT}. Here we assert the steady-state
- * single-writer outcome end-to-end over Kafka.
+ * <p>{@link #twoSourceAccountsPostConcurrently()} is the cross-account parallelism case: two DIFFERENT
+ * source accounts (distinct keys → likely different partitions), each funded for exactly one transfer,
+ * post at listener concurrency ≥ 2. It proves the two accounts are NOT serialized against each other:
+ * BOTH post successfully and independently (each debited once, each Σ=0) — i.e. different accounts are
+ * not on the same single-writer lane. This is the throughput half of the BANK-15 claim; the
+ * single-account case above is the safety half.
  */
 @SpringBootTest(properties = "acme.bank.topics.posting-requested.partitions=6")
 @Import({
@@ -143,6 +155,101 @@ class ConcurrentPostingConsumerIT {
                     transferId);
             assertThat(sum)
                     .as("transfer %s is double-entry balanced (Σ=0)", transferId)
+                    .isEqualByComparingTo("0");
+        }
+    }
+
+    @Test
+    void topicIsProvisionedWithSixPartitions() throws Exception {
+        // accounts' own SagaTopicsConfig NewTopic bean → accounts' KafkaAdmin provisions/grows the
+        // topic to 6 partitions at context refresh (before the listener subscribes). Auto-create is
+        // disabled, so this is genuinely a 6-partition topic, not a 1-partition auto-created funnel.
+        String bootstrap = redpanda.getBootstrapServers().replaceFirst(".*://", "");
+        Map<String, Object> props = new HashMap<>();
+        props.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap);
+        try (Admin admin = Admin.create(props)) {
+            int partitions = admin.describeTopics(List.of("posting-requested"))
+                    .topicNameValues()
+                    .get("posting-requested")
+                    .get()
+                    .partitions()
+                    .size();
+            assertThat(partitions)
+                    .as("accounts self-provisions posting-requested at 6 partitions")
+                    .isEqualTo(6);
+        }
+    }
+
+    @Test
+    void twoSourceAccountsPostConcurrently() {
+        // Cross-account parallelism: two DIFFERENT source accounts (distinct keys → likely different
+        // partitions), each funded for exactly one transfer. Both must post independently — different
+        // accounts are NOT serialized on the same single-writer lane.
+        String bootstrap = redpanda.getBootstrapServers().replaceFirst(".*://", "");
+        String srUrl = redpanda.getSchemaRegistryAddress();
+
+        long nonce = System.nanoTime();
+        String sourceA = "cpc2-srcA-" + nonce;
+        String sourceB = "cpc2-srcB-" + nonce;
+        String dest = "cpc2-dst-" + nonce;
+        openAccount(sourceA);
+        openAccount(sourceB);
+        openAccount(dest);
+        // Each source funded for EXACTLY one transfer — a second debit on either would overdraw.
+        seedBalance(sourceA, AMOUNT.toPlainString());
+        seedBalance(sourceB, AMOUNT.toPlainString());
+
+        String transferA = sourceA + "-t0";
+        String transferB = sourceB + "-t0";
+        try (Producer<String, PostingRequested> producer = newProducer(bootstrap, srUrl)) {
+            // DISTINCT keys (different source accounts) → hash to (likely) different partitions, consumed
+            // in parallel by the concurrency-6 listener. They are not gated against each other.
+            producer.send(new ProducerRecord<>(
+                    "posting-requested",
+                    sourceA,
+                    buildPostingRequested(transferA, sourceA, dest, AMOUNT.toPlainString())));
+            producer.send(new ProducerRecord<>(
+                    "posting-requested",
+                    sourceB,
+                    buildPostingRequested(transferB, sourceB, dest, AMOUNT.toPlainString())));
+            producer.flush();
+        }
+
+        // BOTH transfers are processed (inbox-deduped → exactly 2 processed rows).
+        Awaitility.await().atMost(Duration.ofSeconds(60)).untilAsserted(() -> {
+            Long processed = jdbc.queryForObject(
+                    "SELECT count(*) FROM processed_messages WHERE listener = 'accounts' " + "AND message_id IN (?, ?)",
+                    Long.class,
+                    transferA,
+                    transferB);
+            assertThat(processed).isEqualTo(2L);
+        });
+
+        // Both posted successfully and independently (each is a real posting, not a rejection).
+        for (String transferId : new String[] {transferA, transferB}) {
+            Long entries = jdbc.queryForObject(
+                    "SELECT count(*) FROM ledger_entry WHERE transfer_id = ?", Long.class, transferId);
+            assertThat(entries)
+                    .as("transfer %s posted (both legs written)", transferId)
+                    .isEqualTo(2L);
+            BigDecimal sum = jdbc.queryForObject(
+                    "SELECT coalesce(sum(amount), 0) FROM ledger_entry WHERE transfer_id = ?",
+                    BigDecimal.class,
+                    transferId);
+            assertThat(sum)
+                    .as("transfer %s is double-entry balanced (Σ=0)", transferId)
+                    .isEqualByComparingTo("0");
+        }
+
+        // Each source debited exactly once → balance exactly 0, never negative. The two accounts ran
+        // independently; neither blocked the other.
+        for (String source : new String[] {sourceA, sourceB}) {
+            BigDecimal balance = jdbc.queryForObject(
+                    "SELECT coalesce(sum(amount), 0) FROM ledger_entry WHERE account_id = ? AND asset = 'USD'",
+                    BigDecimal.class,
+                    source);
+            assertThat(balance)
+                    .as("source %s debited exactly once — balance zero, never overdrawn", source)
                     .isEqualByComparingTo("0");
         }
     }
