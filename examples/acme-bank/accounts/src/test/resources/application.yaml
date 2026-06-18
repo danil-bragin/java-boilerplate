@@ -16,3 +16,8 @@ spring:
     events:
       kafka:
         enable-json: false
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          jwk-set-uri: http://localhost:8082/realms/bank/protocol/openid-connect/certs
