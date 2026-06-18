@@ -36,6 +36,9 @@ class BatchListenerConfig {
         // Mirror the per-partition parallelism the default factory uses (one thread per partition, <= 6).
         Integer concurrency = properties.getListener().getConcurrency();
         factory.setConcurrency(concurrency != null ? concurrency : 6);
+        // Honor `spring.kafka.listener.auto-startup` exactly as Boot's auto-configured factory does, so a
+        // test slice that disables listener startup (no schema registry) does not construct a consumer.
+        factory.setAutoStartup(properties.getListener().isAutoStartup());
         return factory;
     }
 }

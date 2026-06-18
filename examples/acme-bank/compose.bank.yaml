@@ -36,10 +36,17 @@ services:
       - ./db/postgresql.tuning.conf:/etc/postgresql/postgresql.tuning.conf:ro
     ports: ["5432:5432"]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U acme"]
+      # BANK-19b: probe a real per-service DB (created last by init-multidb.sh) via an actual SELECT, not
+      # just `pg_isready`. `pg_isready` returns ready during the image's init TEMP-server phase (and the
+      # custom `command:` shifted that timing), so a service depending on it could connect in the window
+      # where the real postmaster is restarting and refuse — Flyway then failed with "Connection refused"
+      # and the service exited(1). Requiring `SELECT 1` against the `transfers` DB means "healthy" only
+      # once init-multidb finished AND the real server accepts connections. start_period covers init.
+      test: ["CMD-SHELL", "psql -U acme -d transfers -tAc 'SELECT 1' >/dev/null 2>&1 || exit 1"]
       interval: 5s
       timeout: 3s
-      retries: 10
+      retries: 20
+      start_period: 20s
 
   redpanda:
     image: redpandadata/redpanda:v24.2.7

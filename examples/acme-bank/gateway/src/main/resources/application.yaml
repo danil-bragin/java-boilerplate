@@ -13,7 +13,7 @@ spring:
       maximum-pool-size: ${HIKARI_MAX_POOL:24}
       minimum-idle: ${HIKARI_MIN_IDLE:8}
       connection-timeout: 10000
-      max-lifetime: 600000
+      max-lifetime: 1800000
       # BANK-19b MONEY-SAFE per-database synchronous_commit=off — GATEWAY ONLY.
       # The gateway transfer_view is a REBUILDABLE CQRS read model: it holds NO balances and enforces NO
       # money invariants (those live in accounts/transfers), every projection listener consumes from

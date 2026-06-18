@@ -32,6 +32,9 @@ class BatchListenerConfig {
         factory.setBatchListener(true);
         Integer concurrency = properties.getListener().getConcurrency();
         factory.setConcurrency(concurrency != null ? concurrency : 6);
+        // Honor `spring.kafka.listener.auto-startup` exactly as Boot's auto-configured factory does — the
+        // web-slice gateway tests set it false (no schema registry available) and must NOT start a consumer.
+        factory.setAutoStartup(properties.getListener().isAutoStartup());
         return factory;
     }
 }
