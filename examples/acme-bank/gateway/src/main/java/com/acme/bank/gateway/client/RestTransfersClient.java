@@ -11,8 +11,13 @@ import org.springframework.web.client.RestClient;
 /**
  * Resilience4j-guarded {@link RestClient} adapter to the downstream transfers service. A
  * {@code @CircuitBreaker} + {@code @Retry} (instance {@code transfers}) wrap the call; when the
- * circuit is open or retries are exhausted the fallback raises {@link GatewayUnavailableException},
- * which the problem+json handler renders as 503.
+ * circuit is open or retries are exhausted (5xx/timeouts) the fallback raises
+ * {@link GatewayUnavailableException}, which the problem+json handler renders as 503.
+ *
+ * <p>A downstream 4xx ({@link org.springframework.web.client.HttpClientErrorException}) is listed in
+ * the instance's {@code ignore-exceptions}, so it is neither retried nor counted toward opening the
+ * circuit, and it propagates unchanged to be rendered as the corresponding 4xx by
+ * {@link com.acme.bank.gateway.web.DownstreamErrorHandler} — never masked as a 503.
  */
 @Component
 public class RestTransfersClient implements TransfersRestClient {
