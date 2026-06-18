@@ -20,13 +20,20 @@ class JpaAccounts implements Accounts {
 
     @Override
     public Optional<Account> findById(AccountId id) {
-        return repository
-                .findById(id.value())
-                .map(e -> new Account(
-                        new AccountId(e.getId()),
-                        new Iban(e.getIban()),
-                        Assets.of(e.getAsset()),
-                        AccountStatus.valueOf(e.getStatus())));
+        return repository.findById(id.value()).map(JpaAccounts::toDomain);
+    }
+
+    @Override
+    public Optional<Account> findByIdForUpdate(AccountId id) {
+        return repository.findByIdForUpdate(id.value()).map(JpaAccounts::toDomain);
+    }
+
+    private static Account toDomain(AccountJpaEntity e) {
+        return new Account(
+                new AccountId(e.getId()),
+                new Iban(e.getIban()),
+                Assets.of(e.getAsset()),
+                AccountStatus.valueOf(e.getStatus()));
     }
 
     @Override

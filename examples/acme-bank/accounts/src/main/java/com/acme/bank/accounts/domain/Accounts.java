@@ -6,6 +6,9 @@ import java.util.Optional;
 public interface Accounts {
     Optional<Account> findById(AccountId id);
 
+    /** Load the account taking a PESSIMISTIC_WRITE row lock — serializes concurrent postings on it. */
+    Optional<Account> findByIdForUpdate(AccountId id);
+
     /** Insert or update an account (new accounts and lifecycle transitions). */
     void save(Account account);
 }

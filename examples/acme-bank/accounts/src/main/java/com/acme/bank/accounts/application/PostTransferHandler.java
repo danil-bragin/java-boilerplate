@@ -31,8 +31,20 @@ public class PostTransferHandler implements Command.Handler<PostTransferCommand,
         AccountId destId = new AccountId(command.destinationAccountId());
         Money amount = command.amount();
 
-        Account source = accounts.findById(sourceId).orElseThrow(() -> new AccountNotFoundException(sourceId));
+        // Serialize concurrent debits on the source: take a write lock so the derived-balance
+        // read-modify-write below cannot interleave with another posting on the same account.
+        // The lock is held to tx end by the surrounding StronglyConsistent transaction.
+        Account source = accounts.findByIdForUpdate(sourceId).orElseThrow(() -> new AccountNotFoundException(sourceId));
+        // Destination is only credited (no overdraft possible) — a plain read, no lock. One lock per
+        // tx (the source) means no lock-ordering / deadlock concern.
         Account dest = accounts.findById(destId).orElseThrow(() -> new AccountNotFoundException(destId));
+
+        // Idempotency re-check UNDER the source lock: by serializing on the source, any earlier posting
+        // for this transferId has now committed and is visible, so a redelivered duplicate short-circuits
+        // here. (The top-of-method check is only a cheap fast path read before the lock is taken.)
+        if (ledger.existsByTransferId(command.transferId())) {
+            return PostTransferResult.posted(command.transferId());
+        }
 
         if (!source.isOperational() || !dest.isOperational()) {
             return PostTransferResult.rejected(command.transferId(), "ACCOUNT_NOT_OPERATIONAL");
