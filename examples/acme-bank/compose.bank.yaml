@@ -152,11 +152,17 @@ services:
     # limit (gateway → ~768m heap) AND caps the host footprint so the stack fits ~8GB with headroom.
     # Budget (services 1.0+0.75+0.75+0.64+0.64 = 3.78G) + infra ≈ 7.4G, leaving room for the
     # co-located Gatling driver during a sweep. deploy.resources mirrors mem_limit for swarm/v2 parity.
-    mem_limit: 1024m
+    #
+    # BANK-20: gateway CPU was the BANK-19b write limiter (3 cores maxed at the ~1,400/s knee) and the
+    # gateway is STATELESS, so it is the horizontal-scaling lever. With the VM raised to ~24 GiB the
+    # per-replica heap is no longer starved: mem_limit 1024m -> 1536m, and we run N replicas behind the
+    # nginx LB (see the `nginx` service below) via `docker compose --scale gateway=N`. The host port is
+    # removed (the LB is now the only published edge) so N replicas don't fight over host :8080.
+    mem_limit: 1536m
     deploy:
       resources:
         limits:
-          memory: 1024m
+          memory: 1536m
     depends_on:
       postgres: {condition: service_healthy}
       redpanda: {condition: service_healthy}
@@ -175,13 +181,35 @@ services:
       SPRING_DATA_REDIS_PORT: "6379"
       TRANSFERS_BASE_URL: http://transfers:8080
       ACCOUNTS_BASE_URL: http://accounts:8080
-    ports: ["8080:8080"]   # the only published edge
+    # BANK-20: NO host port — nginx (below) is the only published edge so the gateway can scale to N
+    # replicas (`docker compose --scale gateway=N`) without host :8080 collisions. Reachable in-network
+    # at gateway:8080; Docker DNS resolves the service name to every replica IP for nginx round-robin.
+    expose: ["8080"]
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- localhost:8080/actuator/health/readiness | grep -q UP"]
       interval: 10s
       timeout: 5s
       retries: 20
       start_period: 30s
+
+  # BANK-20: nginx round-robin load balancer — the new single published edge in front of the N
+  # stateless gateway replicas. Config in ./nginx/gateway.conf (DNS round-robin to gateway:8080,
+  # passes Authorization + Idempotency-Key verbatim, sets X-Forwarded-For). Publishes host 8080:80 so
+  # the BANK-18 bench (BENCH_GATEWAY_URL default http://localhost:8080) hits the LB unchanged.
+  nginx:
+    image: nginx:1.27-alpine
+    mem_limit: 256m
+    depends_on:
+      gateway: {condition: service_healthy}
+    volumes:
+      - ./nginx/gateway.conf:/etc/nginx/nginx.conf:ro
+    ports: ["8080:80"]   # the only published edge now
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- localhost:80/ | grep -q ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
 
   transfers:
     build:
