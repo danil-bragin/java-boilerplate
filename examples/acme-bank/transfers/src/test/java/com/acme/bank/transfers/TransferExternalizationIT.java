@@ -66,7 +66,7 @@ class TransferExternalizationIT {
         assertThat(id).isEqualTo("t-ext-1");
 
         try (Consumer<String, TransferRequested> consumer = newConsumer(bootstrap, srUrl)) {
-            consumer.subscribe(List.of("transfers"));
+            consumer.subscribe(List.of("transfer-requested"));
             Awaitility.await().atMost(Duration.ofSeconds(25)).untilAsserted(() -> {
                 ConsumerRecords<String, TransferRequested> records = consumer.poll(Duration.ofMillis(500));
                 TransferRequested received = null;
