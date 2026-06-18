@@ -208,7 +208,9 @@ services:
       - ./nginx/gateway.conf:/etc/nginx/nginx.conf:ro
     ports: ["8080:80"]   # the only published edge now
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- localhost:80/ | grep -q ok"]
+      # Use 127.0.0.1 (not `localhost`): in the alpine image `localhost` resolves to ::1 first and the
+      # server only `listen 80;` on IPv4, so a localhost probe gets "connection refused".
+      test: ["CMD-SHELL", "wget -qO- 127.0.0.1:80/ | grep -q ok"]
       interval: 10s
       timeout: 5s
       retries: 20
