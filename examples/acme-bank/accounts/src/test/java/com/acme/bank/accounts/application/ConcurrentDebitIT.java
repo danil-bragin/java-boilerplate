@@ -102,4 +102,60 @@ class ConcurrentDebitIT {
                 jdbc.queryForObject("SELECT count(*) FROM posting WHERE transfer_id LIKE 'concurrent-%'", Long.class);
         assertThat(postings).isEqualTo(1L);
     }
+
+    @Test
+    void crossDirectionTransfersDoNotDeadlock() throws Exception {
+        // A->B and B->A concurrently with distinct transferIds. Each tx locks only its OWN source, so
+        // there is no two-account lock-ordering cycle: both must complete quickly with no deadlock.
+        openAccount("xdir-a");
+        openAccount("xdir-b");
+        seedBalance("xdir-a", "100.00");
+        seedBalance("xdir-b", "100.00");
+
+        int threads = 2;
+        var pool = Executors.newFixedThreadPool(threads);
+        var start = new CountDownLatch(1);
+        var done = new CountDownLatch(threads);
+        var results = new CopyOnWriteArrayList<PostTransferResult>();
+        var errors = new CopyOnWriteArrayList<Throwable>();
+        Runnable aToB = () -> {
+            try {
+                start.await();
+                results.add(pipeline.send(
+                        new PostTransferCommand("xfer-a-b", "xdir-a", "xdir-b", Money.of("30.00", Assets.USD))));
+            } catch (Throwable t) {
+                errors.add(t);
+            } finally {
+                done.countDown();
+            }
+        };
+        Runnable bToA = () -> {
+            try {
+                start.await();
+                results.add(pipeline.send(
+                        new PostTransferCommand("xfer-b-a", "xdir-b", "xdir-a", Money.of("40.00", Assets.USD))));
+            } catch (Throwable t) {
+                errors.add(t);
+            } finally {
+                done.countDown();
+            }
+        };
+        pool.submit(aToB);
+        pool.submit(bToA);
+        start.countDown();
+
+        // No deadlock: both finish well within a few seconds (a lock cycle would hang until timeout).
+        boolean finished = done.await(15, java.util.concurrent.TimeUnit.SECONDS);
+        pool.shutdownNow();
+        assertThat(finished)
+                .as("both cross-direction transfers completed without deadlock")
+                .isTrue();
+
+        // Both posted cleanly (each source has ample funds); no exceptions surfaced.
+        assertThat(errors).isEmpty();
+        assertThat(results).hasSize(2);
+        assertThat(results).allSatisfy(r -> assertThat(r.posted()).isTrue());
+        assertThat(balanceOf("xdir-a")).isEqualByComparingTo("110.00"); // -30 +40
+        assertThat(balanceOf("xdir-b")).isEqualByComparingTo("90.00"); // +30 -40
+    }
 }
