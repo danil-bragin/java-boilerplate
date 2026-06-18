@@ -60,6 +60,20 @@ public final class BenchEnv {
         return intProp("BENCH_ARRIVAL_RATE", 0);
     }
 
+    /**
+     * BANK-18 capacity-sweep peak arrival rate (req/s) for the open-model ramp-to-knee. The
+     * CapacitySweepSimulation ramps {@code rampUsersPerSec(BENCH_RAMP_START)} up to this and holds,
+     * making the saturation knee visible in Gatling's per-second RPS + percentile report (default 200).
+     */
+    public static int peakRps() {
+        return intProp("BENCH_PEAK_RPS", 200);
+    }
+
+    /** BANK-18: arrival rate the capacity ramp starts from before climbing to {@link #peakRps()}. */
+    public static int rampStartRps() {
+        return intProp("BENCH_RAMP_START", 5);
+    }
+
     public static int ledgerDepth() {
         return intProp("BENCH_LEDGER_DEPTH", 10);
     }
