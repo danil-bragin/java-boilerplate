@@ -356,3 +356,105 @@ parallelism delta is real and large** for cross-account (the partitions × concu
 RPS number, and (c) the **next limiter has moved**: with the saga consumers no longer the settle
 bottleneck, the synchronous POST/breaker hop and the single shared Postgres are what cap each path now
 (see ADR-0027).
+
+---
+
+## 8. Capacity (BANK-18): real max QPS
+
+> **The previous ~5–10 write/s was a MEASUREMENT ARTIFACT, not capacity.** This section removes the
+> four artifacts that produced it (via **bench-only env overrides** — the deployed defaults are
+> unchanged, verified by `docker compose -f compose.bank.yaml config`) and ramps each path with an
+> **open-model arrival rate** (`CapacitySweepSimulation`, `rampUsersPerSec(...).to(PEAK)`) to its REAL
+> knee. Numbers are still **this single co-located host** (see the standing caveat) — but they are now
+> the machine's real ceiling, not a policy throttle.
+
+### 8.1 Why the old ~5–10 write/s was wrong — four stacked artifacts
+
+1. **Per-caller rate limit (the dominant artifact).** The gateway bucket4j filter caps **100 req/min/IP**
+   keyed on `getRemoteAddr()` ≈ **1.6 req/s** for a single-IP load generator. **And the same limit
+   exists on the downstream `transfers` service** — because the gateway is ONE source IP to transfers,
+   *all* gateway→transfers traffic shares ONE bucket, re-imposing ~1.6/s *behind* the gateway. The
+   downstream `429` is rendered by the gateway's unavailable-fallback as a **`503`**, so it looked like
+   a capacity ceiling. This alone produced the "~5–10/s, then a wall of 503s" curve. Override:
+   `RATE_LIMIT_CAPACITY` raised on **both** gateway and transfers.
+2. **Circuit breaker tripping on co-located latency.** Under CPU starvation the gateway→downstream hop
+   slows; the resilience4j breaker opens and the (private-method) fallback returns 503. Override:
+   `*_CB_SLOW_CALL_DURATION_THRESHOLD=5s`, slow/failure-rate thresholds 100, `*_CB_MIN_CALLS` huge so
+   the breaker never collects enough samples to open.
+3. **Retry amplification.** `max-attempts=3` triples offered load on an already-saturated downstream.
+   Override: `*_RETRY_MAX_ATTEMPTS=1`.
+4. **Closed-loop zero-think load.** A closed model with no think time collapses past the first 503.
+   Override: open arrival-rate injection (`rampUsersPerSec`), offered load independent of answer speed.
+
+All four overrides live in `compose.bench.yaml` (MEASUREMENT-only); `compose.bank.yaml` /
+`application.yaml` defaults (100/min, breaker 50% / 60s, retry 3) are **unchanged** and verified by
+`compose config` without the override.
+
+### 8.2 Real knees (this host, co-located, artifacts removed)
+
+**Write — `POST /v1/transfers`, distinct sources (pool 64), open-model ramp to PEAK, 0% error throughout:**
+
+| PEAK offered (req/s) | sustained mean (req/s) | p99 | err% | accounts/transfers saga lag | saturating resource |
+|---|---|---|---|---|---|
+| 40  | 33  | 17 ms | 0 % | 0 | gateway CPU (~65 %) |
+| 120 | 98  | 16 ms | 0 % | 0 | gateway CPU (~90 %), Postgres ~37 % |
+| 250 | 198 | 26 ms | 0 % | ≤ 5 (drains) | **Postgres CPU ~100–120 %** |
+| 450 | 356 | 68 ms | 0 % | ≤ 9 (drains) | **Postgres CPU ~190–260 %** |
+| 700 | **558** | 55 ms | 0 % | ≤ 5 (drains) | **Postgres CPU ~320–350 %** |
+
+- **Max write-ACCEPT QPS ≈ 550 req/s** (`558` sustained mean at PEAK 700) **@ p99 ≈ 55–68 ms, 0 % error.**
+  The `202`-accept path is cheap (one insert + async publish), so the front door holds very high rates
+  with **zero** errors; what climbs is **p99 (16→26→68 ms)** as **Postgres CPU** rises from ~37 % at
+  120/s to **~3.5 cores at 700/s** — Postgres is the one capping resource, **not the breaker** (which,
+  once relaxed, never re-appeared as the limiter — 0 % error at every rate).
+- **Sustainable saga (lag-bounded) QPS = the full accept rate.** Watching `rpk group describe accounts
+  transfers gateway-projection-*` during every run, **consumer-group lag stayed ≈ 0** (transient ≤ 9,
+  always drained) up to 700/s offered. After BANK-15/16 the 6-partition saga **drains in real time at
+  every rate the front door accepts** — the saga is **not** a lower sustainable ceiling here. The
+  honest sustainable write rate is therefore **≈ 550/s**, bounded by **Postgres CPU**, with the saga
+  keeping pace.
+
+**Read — `GET balance` (derived SUM) + `GET statement`, ledger depth 50, open-model ramp (each iteration = 2 requests):**
+
+| PEAK (iter/s) | total req/s | p99 | err% | saturating resource |
+|---|---|---|---|---|
+| 300 | ~466 | 8 ms   | 0 % | gateway + accounts CPU (~80 % each) |
+| 600 | ~902 | **792 ms** (knee) | 0 % | **gateway + accounts CPU (~190 % each)** |
+
+- **Max clean read QPS ≈ 466 req/s @ p99 8 ms, 0 % error** (PEAK 300 iter/s), with headroom; the **p99
+  knee is ~600 iter/s (~900 req/s)** where p99 jumps to ~800 ms. The capping resource is **gateway +
+  accounts CPU** (the proxy hop + the no-materialization derived-balance SUM), **not Postgres** (~65 %)
+  — consistent with the no-materialization read-cost finding (§4/§5).
+
+**Mixed — 70 / 25 / 5 read / write / open, open-model ramp:**
+
+| PEAK (req/s) | sustained mean (req/s) | p99 | err% | saturating resource |
+|---|---|---|---|---|
+| 100 | 133 | 11 ms | 0 % | gateway CPU (~100 %) + heap |
+| 300 | — | collapse | **74 %** | **gateway OOM-killed** (host RAM cap) |
+
+- **Blended sustainable QPS ≈ 130 req/s @ p99 11 ms, 0 % error** (PEAK 100), saga lag 0. Pushing the
+  blend to 300/s **OOM-killed the gateway** (its heap + the combined read-SUM/write load exceeded the
+  Docker memory share) — the mixed path's cap on this host is **gateway CPU + RAM**, reached well before
+  any clean knee, so we report the achieved sustainable rate and the limiter rather than extrapolate.
+
+### 8.3 The two-number framing (machine vs. per-caller policy) — HONESTY
+
+- **The MACHINE sustains ≈ 550 transfers/s** (accept, Postgres-CPU-bound, saga lag-bounded) **and
+  ≈ 460–900 reads/s** (gateway/accounts-CPU-bound) **on this one co-located host.**
+- **A single caller is rate-limited to 100 req/min (~1.6/s) by DESIGN — a per-caller POLICY, not a
+  capacity limit.** Many distinct callers (distinct source IPs / buckets) aggregate up to the machine
+  ceiling above. The ~5–10/s previously reported was that per-caller policy (compounded by the breaker,
+  retry, and closed-loop model) measured with a single IP — never the machine's capacity.
+- **Breaker confirmed NOT the limiter once relaxed:** every write/read run held **0 % error**; the
+  saturating resource was Postgres or service CPU, never `CallNotPermittedException`.
+
+### 8.4 Co-located caveat (unchanged, multiplies on real infra)
+
+These are **one host**: 5 service JVMs + 5 infra containers + the Gatling JVM sharing 14 vCPU / ~8 GB.
+The write ceiling is **one shared Postgres CPU**; the read/mixed ceiling is **gateway + accounts CPU /
+RAM**. Splitting Postgres (or scaling its cores), lifting Redpanda's `--smp=1`, and running service
+replicas behind the gateway **each multiply the corresponding number**. The durable result is the
+**limiter per path** (write → Postgres CPU; read → gateway/accounts CPU; mixed → gateway CPU+RAM) and
+that **the saga is no longer a throughput bottleneck** — not the absolute QPS, which is a property of
+this host. See ADR-0028.
