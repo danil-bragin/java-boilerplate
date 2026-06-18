@@ -259,3 +259,100 @@ Load knobs (system properties / env, see `BenchEnv`): `BENCH_USERS`, `BENCH_ARRI
 `BENCH_LEDGER_DEPTH`, `BENCH_READ_TARGET` (pre-seeded account id for deep-ledger reads),
 `BENCH_POOL_SIZE`, `BENCH_TOKEN_COUNT`. Benchmarks are **on-demand only** (`gatlingRun`); they are NOT
 part of `gradle build`.
+
+---
+
+## 7. Scaling: before/after (BANK-15/16)
+
+> **BANK-17.** The BANK-13 suite (§2) was re-run on the **same single host, same load levels, same
+> harness** against the BANK-15/16-tuned stack: every saga topic provisioned to **6 partitions**, per-
+> service Kafka listener `concurrency: 6` (one consumer thread per partition), the BANK-16 Kafka latency
+> tuning (`linger.ms` / `fetch-max-wait` / `max-poll`), and the BANK-15 single-writer-per-source-account
+> consumer (source-account key → one partition → one writer lane). The §1 caveat still holds: **co-located
+> single host → these are RELATIVE deltas, not absolute capacity.** Where the host capped a path, that is
+> stated. Re-run on 2026-06-18 (Apple `Mac16,7`, 14 vCPU / ~8 GB Docker).
+
+### 7.0 Deployed partition counts — VERIFIED 6 (the BANK-15/16 premise)
+
+The whole premise is that the deployed topics are multi-partition. Confirmed in the live stack via
+`rpk topic list` / `rpk group describe` (NOT 1 partition — the provisioning took effect at deploy):
+
+| Topic | Partitions | | Topic | Partitions |
+|---|---|---|---|---|
+| `posting-requested` | **6** | | `transfer-screened` | **6** |
+| `transfer-requested` | **6** | | `ledger-posted` | **6** |
+| `transfer-completed` | **6** | | `posting-rejected` | **6** |
+| `transfer-failed` | **6** | | (`_schemas`, registry-internal) | 1 |
+
+`rpk group describe accounts` → **STATE Stable, MEMBERS 6, TOTAL-LAG 0**, with
+`consumer-accounts-1..6` each assigned one of `posting-requested`-0..5 — i.e. **6 consumer threads
+consuming 6 partitions in parallel**, vs the BANK-13 single-partition / concurrency-1 funnel. After the
+load runs the group drained back to **TOTAL-LAG 0** (consumers kept up; no backlog). This is the
+load-bearing evidence for the settle delta below.
+
+### 7.1 Per-scenario before/after (same load levels)
+
+| Scenario (load) | Metric | BANK-13 (before) | BANK-15/16 (after) | Limiting resource (after) |
+|---|---|---|---|---|
+| **Write cross** (open 3 req/s, 30 s) | OK rps · p50 · p95 · p99 · err | ~2.8 · 19 · 238 · 434 · **4.8 %** (503) | **3.0 · 12 · 20 · 26 · 0 %** | breaker idle at 3/s; POST publish is the only sync work |
+| **Write hot** (open 3 req/s, 30 s) | OK rps · p50 · p95 · p99 · err | ~2.9 · 18 · 30 · 439 · **3.8 %** (503) | **3.0 · 11 · 17 · 20 · 0 %** | same — lock lives downstream, not in the POST |
+| **Read depth-10** (4 closed users) | p50 · p95 · p99 · agg rps · err | 2 · 2 · 3 · ~1 380 · 0 % | 2 · 4 · 6 · **~1 390 · 0 %** | Postgres CPU (unchanged; reads weren't a BANK-15/16 target) |
+
+The tighter write-POST tails (p99 **434→26 / 439→20 ms**, error **~4–5 %→0 %**) are the BANK-16 Kafka
+producer latency tuning + the breaker no longer flickering at this gentle rate — the publish itself is
+fast and steady. Hot and cross POST p50 stay indistinguishable (11 vs 12 ms) because the source-account
+lock is in the downstream saga, never the synchronous 202 (§3.2). Reads are unchanged (expected — they
+don't touch the saga-consumer path).
+
+### 7.2 Saga-settle delta — the headline gain (partitions × concurrency)
+
+Authoritative **wall-clock** POST→`COMPLETED` (poll `GET /v1/transfers/{id}` to terminal); the Gatling
+`saga-settle` *group* still reports cumulative request time + an initial-poll 404 race, so the wall-clock
+figures below are the authoritative settle numbers (same methodology as §2.3):
+
+| Settle scenario | BANK-13 (1 partition, concurrency 1) | BANK-15/16 (6 partitions, concurrency 6) | Delta |
+|---|---|---|---|
+| Sequential, 1 at a time | ~325 ms median | **~188 ms median** (186–197) | **−42 %** |
+| **6 concurrent, cross-account** | **488 ms median**, 6/6 COMPLETED | **122 ms median** (104–155), 6/6 | **−75 %** |
+| 6 concurrent, hot-account | 144 ms median, 5/6 (1 lost) | 161 ms median, 6/6 (one run 5/6 — transient, matches baseline noise) | ≈ flat (serialized by design) |
+| 12 concurrent, cross-account | — (not run) | **183 ms median** (174–201), **12/12** | beyond 6-wide: 2 keys/partition, still ≪ baseline-6 |
+
+**The cross-account settle is the real win:** 6 distinct-source transfers that the BANK-13
+single-partition funnel serialized into one consumer lane (488 ms) now fan out across 6 partitions / 6
+consumer threads and settle in **122 ms (−75 %)**; 12 concurrent still settle in 183 ms — under the old
+*6-concurrent* number. Sequential settle also dropped (~325→188 ms) from the BANK-16 Kafka latency
+tuning shortening each saga hop. **Hot-account is intentionally flat** (≈150–161 ms): same-source
+postings serialize on the single-writer lane by design (BANK-15), so more partitions don't help one hot
+account — and shouldn't.
+
+**Arrival-rate knee.** Pushing `SagaSettleSimulation` to ~10 POST/s open-arrival, the **consumer-group
+lag stayed 0** the whole run — the saga-consumer side never backed up. What kneed instead was the
+**synchronous POST → transfers hop**: the gateway circuit breaker began shedding (503) at ~10/s, holding
+~5/s sustained OK. So after BANK-15/16 the settle-consumer parallelism is **no longer the settle
+limiter** on this host; the front-door breaker / single-host downstream is (BANK-13 Finding #1, unchanged).
+
+### 7.3 Per-account write change — honest single-host assessment
+
+**A full-stack RPS jump from the per-account single-writer change was NOT observable on this host, and we
+do not claim one.** On one co-located Postgres + one `--smp=1` Redpanda, infrastructure contention caps
+the write path well before a per-account lock would; at the modest comparative load the host sustains,
+the lock is not the binding constraint (BANK-13 §3.2 already showed this). The honest framing:
+
+- The BANK-15 change **raises the per-account write ceiling** (a hot account's postings now flow through
+  a dedicated single-writer lane keyed to one partition, instead of contending on a broadly-locked path)
+  and **removes lock-wait overhead** on the common cross-account case — both provable only at **multi-host
+  scale** with a non-saturated DB, which this single host cannot exhibit.
+- The **correctness + single-writer guarantee** is proven by the BANK-15 integration tests, not by a
+  benchmark: **`ConcurrentDebitIT`** (concurrent debits on one account never overdraw / stay serialized)
+  and **`ConcurrentPostingConsumerIT`** (the partition-keyed consumer applies one writer per source
+  account even with 6 parallel consumer threads). Those are the load-bearing evidence; the benchmark's
+  job is the *settle parallelism* delta (§7.2), which it shows.
+
+### 7.4 Standing caveat (unchanged)
+
+Co-located single host → **relative, not absolute**. The durable deliverables are: (a) the **settle
+parallelism delta is real and large** for cross-account (the partitions × concurrency win), (b) the
+**per-account write change is a ceiling-raiser + correctness win** that a single host cannot turn into an
+RPS number, and (c) the **next limiter has moved**: with the saga consumers no longer the settle
+bottleneck, the synchronous POST/breaker hop and the single shared Postgres are what cap each path now
+(see ADR-0027).
