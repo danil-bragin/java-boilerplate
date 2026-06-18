@@ -3,6 +3,10 @@ package com.acme.web;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import jakarta.servlet.http.HttpServletResponse;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockFilterChain;
@@ -101,6 +105,81 @@ class IdempotencyFilterTest {
         MockHttpServletRequest req = new MockHttpServletRequest("POST", "/v1/orders");
         filter.doFilter(req, new MockHttpServletResponse(), chain);
         assertThat(invocations.get()).isEqualTo(1);
+    }
+
+    @Test
+    void concurrentFirstRequestsExecuteHandlerOnce() throws Exception {
+        InMemoryIdempotencyStore store = new InMemoryIdempotencyStore();
+        IdempotencyFilter filter = new IdempotencyFilter(store);
+        AtomicInteger handlerInvocations = new AtomicInteger();
+
+        CountDownLatch start = new CountDownLatch(1);
+
+        java.util.function.Supplier<MockFilterChain> slowChain = () -> new MockFilterChain() {
+            @Override
+            public void doFilter(jakarta.servlet.ServletRequest req, jakarta.servlet.ServletResponse res)
+                    throws java.io.IOException {
+                handlerInvocations.incrementAndGet();
+                try {
+                    Thread.sleep(100);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                HttpServletResponse http = (HttpServletResponse) res;
+                http.setStatus(201);
+                http.setContentType("application/json");
+                http.getWriter().write("{\"id\":\"t-1\"}");
+            }
+        };
+
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        MockHttpServletResponse r1 = new MockHttpServletResponse();
+        MockHttpServletResponse r2 = new MockHttpServletResponse();
+        try {
+            var f1 = pool.submit(() -> {
+                start.await();
+                filter.doFilter(post("key-conc"), r1, slowChain.get());
+                return null;
+            });
+            var f2 = pool.submit(() -> {
+                start.await();
+                filter.doFilter(post("key-conc"), r2, slowChain.get());
+                return null;
+            });
+            start.countDown();
+            f1.get(5, TimeUnit.SECONDS);
+            f2.get(5, TimeUnit.SECONDS);
+        } finally {
+            pool.shutdownNow();
+        }
+
+        // handler executed EXACTLY once; loser got a replayed 201 or a 409, never a second execution
+        assertThat(handlerInvocations.get()).isEqualTo(1);
+        assertThat(r1.getStatus()).isIn(201, 409);
+        assertThat(r2.getStatus()).isIn(201, 409);
+    }
+
+    @Test
+    void inProgressKeyReturns409() throws Exception {
+        InMemoryIdempotencyStore store = new InMemoryIdempotencyStore();
+        IdempotencyFilter filter = new IdempotencyFilter(store);
+
+        // simulate an in-progress (reserved but not yet completed) key
+        assertThat(store.reserve("key-inflight")).isTrue();
+
+        AtomicInteger invocations = new AtomicInteger();
+        MockFilterChain chain = new MockFilterChain() {
+            @Override
+            public void doFilter(jakarta.servlet.ServletRequest req, jakarta.servlet.ServletResponse res) {
+                invocations.incrementAndGet();
+            }
+        };
+
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        filter.doFilter(post("key-inflight"), response, chain);
+
+        assertThat(response.getStatus()).isEqualTo(HttpServletResponse.SC_CONFLICT);
+        assertThat(invocations.get()).isZero(); // handler not executed for an in-progress key
     }
 
     private static MockHttpServletRequest post(String key) {

@@ -9,19 +9,11 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import org.springframework.web.util.ContentCachingResponseWrapper;
 
 /**
- * Replays a previously stored response when a request carries an {@code Idempotency-Key} already seen,
- * guarding against SEQUENTIAL retries of requests whose outcome was successful (2xx). Only applies to
- * unsafe methods (POST/PATCH/PUT).
- *
- * <p>Only 2xx responses are cached: 4xx responses (e.g. validation failures) are intentionally NOT
- * stored so that a client which fixes its request body can retry under the same key and succeed.
- * 5xx responses are similarly not cached as the server-side failure may be transient.
- *
- * <p><b>Known limitation:</b> the in-memory store does not prevent concurrent first-requests from
- * executing simultaneously. The idempotency guarantee covers only sequential retries — a concurrent
- * duplicate that arrives before the first response is committed will proceed to execution. For
- * distributed or concurrent-safe idempotency use a shared, atomic store (e.g. Redis with a
- * compare-and-set).
+ * Idempotent retries of UNSAFE requests carrying an {@code Idempotency-Key}: the first request
+ * reserves the key and executes; a later retry replays the stored 2xx response; a concurrent
+ * request whose key is still in-progress gets 409 Conflict. Only 2xx outcomes are cached (4xx/5xx
+ * release the reservation so the client can retry after fixing the request). The default store is
+ * in-process with a TTL — use a shared store for multi-instance deployments.
  */
 public class IdempotencyFilter extends OncePerRequestFilter {
 
@@ -42,22 +34,40 @@ public class IdempotencyFilter extends OncePerRequestFilter {
             return;
         }
 
-        var existing = store.find(key);
-        if (existing.isPresent()) {
-            writeStored(response, existing.get());
+        var completed = store.find(key);
+        if (completed.isPresent()) {
+            writeStored(response, completed.get());
+            return;
+        }
+        if (!store.reserve(key)) {
+            // either it completed between find() and reserve() — replay — or it's still in progress -> 409
+            var raced = store.find(key);
+            if (raced.isPresent()) {
+                writeStored(response, raced.get());
+            } else {
+                response.setStatus(HttpServletResponse.SC_CONFLICT);
+            }
             return;
         }
 
         ContentCachingResponseWrapper wrapper = new ContentCachingResponseWrapper(response);
-        chain.doFilter(request, wrapper);
-        int status = wrapper.getStatus();
-        if (status >= 200 && status < 300) {
-            store.save(
-                    key,
-                    new IdempotencyStore.StoredResponse(
-                            status, wrapper.getContentType(), wrapper.getContentAsByteArray()));
+        boolean cached = false;
+        try {
+            chain.doFilter(request, wrapper);
+            int status = wrapper.getStatus();
+            if (status >= 200 && status < 300) {
+                store.complete(
+                        key,
+                        new IdempotencyStore.StoredResponse(
+                                status, wrapper.getContentType(), wrapper.getContentAsByteArray()));
+                cached = true;
+            }
+        } finally {
+            if (!cached) {
+                store.release(key);
+            }
+            wrapper.copyBodyToResponse();
         }
-        wrapper.copyBodyToResponse();
     }
 
     private void writeStored(HttpServletResponse response, IdempotencyStore.StoredResponse stored) throws IOException {
