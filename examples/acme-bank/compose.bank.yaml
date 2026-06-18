@@ -4,10 +4,11 @@ name: acme-bank-local
 # bank services built from per-service Dockerfiles. Build the jars first: `gradle bankJars`.
 #
 # ISSUER-URL RULE (avoids the classic Keycloak `iss` mismatch 401): every service validates tokens
-# against http://keycloak:8080/realms/bank (the in-network issuer). KC_HOSTNAME=keycloak pins the
-# token `iss` to that same URL, so a token fetched from inside the compose network is accepted.
-# A token fetched from the HOST via http://localhost:8082 carries iss=http://localhost:8082/... and
-# will be rejected by the services — fetch tokens from within the network (see README).
+# against http://keycloak:8080/realms/bank (the in-network issuer). KC_HOSTNAME is set to the FULL URL
+# http://keycloak:8080 (Keycloak hostname-v2): the frontend AND backchannel URLs are pinned to that
+# constant, so EVERY minted token carries iss=http://keycloak:8080/realms/bank regardless of which host
+# the token endpoint was called from. This makes a token fetched from the HOST via the mapped port
+# (localhost:8082) valid to the services too — which the e2e relies on (it fetches from the host).
 
 services:
   postgres:
@@ -62,8 +63,11 @@ services:
     environment:
       KEYCLOAK_ADMIN: admin
       KEYCLOAK_ADMIN_PASSWORD: admin
-      # Pin the issuer hostname so token `iss` == the URL services validate against (see rule above).
-      KC_HOSTNAME: keycloak
+      # Pin the issuer to a constant full URL so token `iss` == the URL services validate against,
+      # for callers both inside the network and on the host (see rule above). With a full-URL hostname
+      # in hostname-v2 the backchannel URL equals this too, so internal service<->Keycloak calls and the
+      # `iss` claim all use http://keycloak:8080.
+      KC_HOSTNAME: http://keycloak:8080
       KC_HOSTNAME_STRICT: "false"
       KC_HTTP_ENABLED: "true"
       # Expose the management health endpoint on port 9000 (no hostname enforcement) for the

@@ -53,4 +53,5 @@ include(
     "examples:acme-bank:antifraud",
     "examples:acme-bank:notifications",
     "examples:acme-bank:gateway",
+    "examples:acme-bank:e2e",
 )
