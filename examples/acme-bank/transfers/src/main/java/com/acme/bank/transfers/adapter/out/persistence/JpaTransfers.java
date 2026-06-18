@@ -6,7 +6,9 @@ import com.acme.bank.transfers.domain.TransferStatus;
 import com.acme.bank.transfers.domain.Transfers;
 import com.acme.money.Assets;
 import com.acme.persistence.MoneyAmount;
+import java.util.List;
 import java.util.Optional;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -38,6 +40,14 @@ class JpaTransfers implements Transfers {
     @Override
     public boolean exists(TransferId id) {
         return repository.existsById(id.value());
+    }
+
+    @Override
+    public List<Transfer> query(String accountId, TransferStatus status, int page, int size) {
+        String statusName = status == null ? null : status.name();
+        return repository.query(accountId, statusName, PageRequest.of(page, size)).stream()
+                .map(this::rehydrate)
+                .toList();
     }
 
     private Transfer rehydrate(TransferJpaEntity e) {
