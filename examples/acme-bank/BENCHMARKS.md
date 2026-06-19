@@ -677,55 +677,73 @@ Still **one host**, now 14 vCPU / **23.68 GiB** shared across 8 service containe
 accounts + antifraud + notifications + nginx) + 5 infra + the host Gatling JVM. The write ceiling is now the
 **single-instance transfers service**; replicating it (like the gateway) is the next lift. See ADR-0030.
 
-## 11. Batching + transfers replication (BANK-21) — money-safe, toward 5k
+## 11. Transfers replication (BANK-21) + money/saga batch REVERTED — money-safe
 
-> **Headline.** Converted the saga consume-side **and the money ledger-posting** to **batch listeners** (a
-> poll of N records → **one** transaction → one commit, instead of N commits/transfer) and **replicated the
-> BANK-20 transfers bottleneck behind an nginx LB**. The **clean full-saga write knee is ~1,500 transfers/s at
-> 0 % error** (p99 ~1.9 s, saga lag bounded), with **~1,200/s the comfortable knee** (p99 427 ms). **5k was NOT
-> reached** — the hard limiter is **total CPU on the 14-core box, shared with the co-located Gatling driver**:
-> at the ~1,700/s cliff the gateway accept tier queues, and adding a 3rd gateway destabilized the host rather
-> than lifting the knee. Money-safety is **fully intact** — the batched ledger posting is **stricter** than
-> per-record (same-source postings serialize in one tx), and the post-bench ledger held **Σ=0, 0 unbalanced
-> transfers, 0 negative real-account balances, 0 duplicate postings**. Beyond ~1.5k the remaining lever is
-> **hop reduction (Phase 2)**, not more replicas.
+> **Headline.** The BANK-21 **application-level batch listeners on the money/saga consume-side were REVERTED**
+> to **per-record** processing after a money-safety review found a **critical latent bug**: a `@Transactional`
+> batch method that surfaces a mid-batch failure with `BatchListenerFailedException(record, i)` on a
+> **non-transactional** Kafka container will **commit the offsets of records 0..i-1 whose DB transaction was
+> rolled back** by the infra error — **silently losing those money movements** (recoverable only via the
+> reconciler, a fragile, untested path). The batch also did **not** improve demonstrable throughput
+> (it measured **~1,500/s vs BANK-20's ~2,200/s** at the gateway accept knee), so reverting loses no proven
+> throughput. **Per-record is inherently money-safe**: each record = its own transaction **and** its own
+> committed offset, so a failure rolls back **and** re-drives exactly that record — there is no batch-boundary
+> across which money can be lost, and a poison record is isolated cleanly to the DLT. The money-safe fsync
+> efficiency comes from **BANK-19b Postgres group-commit** (which batches WAL fsyncs across concurrent
+> per-record commits at the database level) **+ per-record idempotency**, not from an application batch.
+> **The transfers LB / replication (Task 3) is RETAINED** — it is independent of batching and money-safe. The
+> honest demonstrable write ceiling on this **co-located 14-core host** (load generator on the same cores) is
+> **~2.2k/s at the gateway accept knee**; the architecture is component-cheap and would scale further on
+> separate infra. Money-safety is **fully intact** — post-bench ledger held **Σ=0, 0 unbalanced transfers, 0
+> negative real-account balances, 0 duplicate postings**.
 
-### 11.1 What changed
+### 11.1 What changed (the REVERT)
 
-- **Consume-side batch listeners (Task 1, transfers):** `ScreeningResultListener` + `PostingResultListener`
-  now receive `List<ConsumerRecord<..>>` and apply the whole poll in **one** `@Transactional` — amortizing
-  the commit/WAL-fsync across the batch. Per-record `inbox.firstTime(..)` dedup stays **inside the loop**, so
-  a redelivered result never double-advances; records arrive in offset order keyed by transferId, so
-  per-transfer ordering and the state-machine guards hold. These hops move **no money** (the transfer status
-  + the next saga event), so there is no money partial-failure risk.
-- **Money ledger-posting batch listener (Task 2, accounts — HIGH-CARE):** `PostingRequestedListener` now
-  processes the poll in **one** transaction; each per-record `pipeline.send(PostTransferCommand)` JOINS that
-  tx (`StronglyConsistent`'s `TransactionTemplate` is `PROPAGATION_REQUIRED`). **Overdraft stays impossible —
-  in fact stricter:** `posting-requested` is keyed by the **source account** (BANK-15) → a source's postings
-  co-partition into one batch/tx; each posting takes the BANK-11 `findByIdForUpdate` source lock (re-entrant
-  within the tx) and reads its derived balance with a JPQL `SELECT SUM(..)`, which Hibernate `FlushMode.AUTO`
-  **flushes the prior in-batch postings' entries before** — so each later posting's SUM **sees the earlier
-  uncommitted siblings** and they serialize. Per-record `inbox` dedup + the per-posting `saveAndFlush` anchor
-  short-circuit a redelivered duplicate (within or across batches).
-- **Rejections are results, only infra errors fail the batch:** INSUFFICIENT_FUNDS / ACCOUNT_NOT_OPERATIONAL /
-  ACCOUNT_ASSET_MISMATCH come back as `PostTransferResult.rejected(..)` (the handler **returns**, never
-  throws) → emit `posting-rejected` and **continue** — a rejection never rolls back its posted siblings. Only
-  a TRUE infra error (DB down) throws; the listener wraps it in `BatchListenerFailedException(record, i)` so
-  the container commits offsets up to `i` and re-drives from `i`, the posting-PK anchor makes the re-drive
-  idempotent, and any rolled-back sibling is also re-driven by the transfers `SagaReconciler` against the
-  ledger. **No money guarantee depends on the batch commit boundary** — overdraft-impossibility is the lock +
-  in-tx SUM; double-post-impossibility is the anchor.
-- **transfers replicated behind an LB (Task 3):** a new `transfers-lb` nginx (static `upstream` + `keepalive`,
-  passes `Authorization` + `Idempotency-Key` verbatim — the BANK-20 connection-reuse lesson re-applied)
-  fronts `--scale transfers=N`; the gateway's `TRANSFERS_BASE_URL` points at it so the RestClient keepalive
-  pool spreads across replicas instead of pinning to one. The **consume-side distributes automatically via the
-  `transfers` consumer group** — verified: the group had members on **3 distinct replica IPs**, lag 0.
+The bug, concretely. With a `@Transactional` method that receives `List<ConsumerRecord<..>>` and a
+**non-transactional** listener container (Boot's default), the **whole poll is one DB transaction** but
+**offsets are committed by the container after the method returns**. When record `i` hits a true infra error
+(DB blip, lock timeout) the method throws `BatchListenerFailedException(record, i)`; the container's
+`DefaultErrorHandler` then **commits offsets 0..i-1 and re-drives from i**. But the single batch transaction
+**rolled back**, so the DB writes for records 0..i-1 are **gone** while their offsets are **committed** —
+those records will **never be re-delivered**. On the money path that is a **silently lost ledger posting**;
+on the saga path, a lost saga advance. Recovery existed only via the `SagaReconciler` — fragile and
+untested. **Per-record has no such gap**: one record = one tx = one offset, committed together or not at all.
 
-### 11.2 The money-safety gate: `BatchOverdraftIT`
+- **accounts `PostingRequestedListener` (the MONEY path — reverted):** back to a single-record
+  `@KafkaListener(topics = "posting-requested", groupId = "accounts")` + `@Transactional`: `inbox.firstTime` →
+  `pipeline.send(PostTransferCommand)` → emit `ledger-posted`/`posting-rejected`, **one record per
+  invocation, own tx, own offset**. Removed the batch container factory and `BatchListenerFailedException`.
+  The BANK-11 `findByIdForUpdate` source lock + posting-PK anchor + Σ=0 are unchanged, so **overdraft stays
+  impossible**: concurrent same-source postings serialize on the row lock.
+- **transfers `ScreeningResultListener` + `PostingResultListener` (reverted):** back to per-record `@KafkaListener`
+  + `@Transactional`; inbox dedups redeliveries, tx and offset move together.
+- **antifraud `TransferRequestedListener` + gateway `TransferStatusProjection` (reverted):** these were the
+  BANK-19b non-money batches and used the **same unsafe shape** (`@Transactional` batch method on a
+  non-transactional container). Screening **feeds the saga**; the gateway projection is a **rebuildable** read
+  model (lower stakes) — but both reverted to per-record to remove the latent offset-vs-rollback mismatch and
+  the batch-tx-poisoning hazard (a single duplicate aborting the whole batch tx). The gateway datasource
+  keeps `synchronous_commit=off` (the read model is rebuildable from `earliest`), so its fsync stays off the
+  hot path regardless. The notifications listener was already per-record and untouched.
+- **Removed the now-unused `BatchListenerConfig`** from all four modules; no `spring.kafka.listener.type:
+  batch` settings were tied to the reverted listeners.
+- **Where the fsync efficiency now comes from:** **BANK-19b Postgres group-commit** (`commit_delay` /
+  `commit_siblings` in `db/postgresql.tuning.conf`) batches WAL fsyncs **across concurrent per-record
+  commits** at the database level — money-safe — so per-record keeps most of the fsync efficiency **without**
+  any application-batch complexity.
+- **transfers replicated behind an LB (Task 3 — RETAINED, unchanged):** a `transfers-lb` nginx (static
+  `upstream` + `keepalive`, passes `Authorization` + `Idempotency-Key` verbatim — the BANK-20 connection-reuse
+  lesson re-applied) fronts `--scale transfers=N`; the gateway's `TRANSFERS_BASE_URL` points at it so the
+  RestClient keepalive pool spreads across replicas. The **consume-side distributes automatically via the
+  `transfers` consumer group** — verified: members on **3 distinct replica IPs**, lag 0. This is **replication,
+  independent of batching, money-safe**, and is kept.
 
-A new IT (`accounts/.../BatchOverdraftIT`) is the non-negotiable gate. It produces **8 `posting-requested`
-for the SAME source account** (keyed by the source → one partition → one poll batch → one tx), source funded
-for **exactly 5** of the 8 equal 20.00 debits. It asserts batching does NOT weaken overdraft prevention:
+### 11.2 The money-safety gate: `SameSourcePostingOverdraftIT`
+
+The batch-design gate `BatchOverdraftIT` was **repurposed** (and renamed) as a **per-record concurrent
+same-source overdraft test** — the batch-specific framing is dropped, the overdraft invariant is kept. It
+produces **8 `posting-requested` for the SAME source account** (keyed by the source → one partition →
+consumed in offset order, **each in its own per-record tx**), source funded for **exactly 5** of the 8 equal
+20.00 debits. It asserts a same-source burst can never overdraw:
 
 | Assertion | Result |
 |---|---|
@@ -736,11 +754,11 @@ for **exactly 5** of the 8 equal 20.00 debits. It asserts batching does NOT weak
 | ledger rows written | **exactly 10 entries (5×2), 5 posting rows** |
 | rejected transfers | **0 ledger entries** |
 
-This proves (a) the in-tx serialization makes an 8-deep same-source overdraft impossible, and (b) the 3
-rejections are normal results that **did not roll back** the 5 posted siblings. `BatchOverdraftIT`,
-`ConcurrentDebitIT` (the BANK-11 direct-handler 8-thread overdraft test — the lock path is unchanged for
-non-batched callers), `PostTransferIT`, `PostingFlowIT`, `TransferAdvanceIT` (extended with a batch-of-6 +
-in-batch redelivery dedup), `ScreeningIT`, `NotificationIT`, and gateway `TransferProjectionIT` are all green.
+This proves (a) the per-posting `findByIdForUpdate` source lock + derived-balance SUM serialize same-source
+postings so an 8-deep overdraft is impossible, and (b) the 3 rejections are normal results that did not drop
+the 5 posted ones. `SameSourcePostingOverdraftIT`, `ConcurrentDebitIT` (the BANK-11 direct-handler 8-thread
+overdraft test), `PostTransferIT`, `PostingFlowIT`, `TransferAdvanceIT` (its burst-of-6 + redelivery-dedup
+test re-framed per-record), `ScreeningIT`, `NotificationIT`, and gateway `TransferProjectionIT` are all green.
 
 ### 11.3 Re-bench: the new write knee (full-saga, open-model, 24 GiB / 14-core VM, gateway=2 / transfers=3)
 
@@ -751,14 +769,21 @@ in-batch redelivery dedup), `ScreeningIT`, `NotificationIT`, and gateway `Transf
 | 1700 (gw2) | **39.6 %** | 44 s (collapse) | — | ~71 % (not pegged) | 0 (saga drains) | **gateway accept tier queues** |
 | 1700 (gw3) | host destabilized (conn timeouts, Gradle daemon killed) | — | — | host overcommit | 0 | **co-located driver + fleet > 14 cores** |
 
+> **Note.** The table below was measured with the BANK-21 batch listeners in place. The batch has since been
+> reverted (see §11.1); these numbers are retained only as the **honest demonstrable ceiling** for this
+> co-located host. The batch did **not** beat BANK-20's gateway accept knee (~1.5k full-saga here vs ~2.2k
+> accept), so reverting it loses no proven throughput. The limiter — **total CPU on the 14-core box shared
+> with the co-located driver** — is independent of per-record vs batch.
+
 - **Max clean full-saga write QPS ≈ 1,500/s at 0 % error** (p99 ~1.9 s, saga lag bounded); **~1,200/s is the
   comfortable knee** (p99 427 ms). The cliff is **~1,700/s** (latency collapse, then KO).
 - **Why this is below BANK-20's "2,200/s".** BANK-20 measured the **gateway accept knee only** (the POST
-  returns 202 once the transfer is *requested*; the saga settles async). This BANK-21 sweep is the **same
-  open-model write**, but the box is now also running the full batched saga to completion under load and the
-  driver is co-located; the honest **end-to-end sustainable** rate at 0 % error is ~1.5k. The batching win is
-  real (accounts CPU **~4–10 %**, saga lag **bounded/0** even at the knee — the ledger posting is now nearly
-  free), but it does not move the **gateway accept tier**, which is the limiter at the cliff.
+  returns 202 once the transfer is *requested*; the saga settles async). This sweep is the **same open-model
+  write**, but the box is also running the full saga to completion under load and the driver is co-located; the
+  honest **end-to-end sustainable** rate at 0 % error is ~1.5k. The ledger posting is cheap either way
+  (accounts CPU **~4–10 %**, saga lag **bounded/0** even at the knee), so it is **not** the limiter — the
+  **gateway accept tier** is, at the cliff. The demonstrable architecture ceiling here remains BANK-20's
+  **~2.2k accept knee**; it is component-cheap and would scale further on separate infra.
 - **The hard limiter is total CPU at 14 cores, shared with the co-located Gatling driver.** At the cliff the
   two gateways sat ~175 % **each** (~3.5 cores on the accept/JWT/proxy hop) and Postgres ~140 %; total ~1040 %
   of 1400 with the driver also resident. Scaling gateway 2→3 did **not** lift the knee — it pushed the
@@ -768,27 +793,29 @@ in-batch redelivery dedup), `ScreeningIT`, `NotificationIT`, and gateway `Transf
 ### 11.4 The arithmetic of 5k (honest)
 
 At a measured **~5 millicore/transfer** end-to-end (gateway JWT/proxy + transfers POST + the saga relay +
-the batched posting), **5,000 transfers/s ≈ 25 cores** of work — **almost 2× the 14-core box**, before the
-co-located load generator. **Batching cut the per-transfer commit/poll overhead** (one commit per poll vs one
-per record; accounts posting CPU fell to single digits and saga lag stays bounded), and **replicas scale the
-accept tier to the CPU wall**, but **no amount of replication beats the total-CPU ceiling**. **5k is not
-reachable on 14 cores.** Reaching it needs **hop reduction (Phase 2)** — cutting the **per-transfer CPU**
-itself: a synchronous fast-path or merging saga hops (e.g. fold screening into the request, or post
-inline for the common case) to spend fewer cores per transfer, not more boxes. That is the lever beyond
-~1.5k here, and the honest path to 5k is **fewer cores/transfer**, then a bigger/dedicated cluster.
+the posting), **5,000 transfers/s ≈ 25 cores** of work — **almost 2× the 14-core box**, before the
+co-located load generator. **Replicas scale the accept tier to the CPU wall**, but **no amount of replication
+beats the total-CPU ceiling**. **5k is not reachable on 14 cores.** The reverted application batch did not
+move this arithmetic — the per-transfer commit/poll overhead is already amortized by **Postgres group-commit**
+(WAL fsyncs batched across concurrent per-record commits) the money-safe way, and accounts posting CPU is
+already single-digit per-record. Reaching 5k needs **hop reduction (Phase 2)** — cutting the **per-transfer
+CPU** itself: a synchronous fast-path or merging saga hops (fold screening into the request, or post inline
+for the common case) to spend fewer cores per transfer, not more boxes — then a bigger/dedicated cluster.
 
-### 11.5 Money-safety — intact (no guarantee weakened)
+### 11.5 Money-safety — intact (and the latent loss bug removed)
 
-- **Overdraft impossible, verified two ways:** `BatchOverdraftIT` (8-deep same-source batch in one tx → 5
-  post / 3 reject / balance 0, never negative) **and** the post-bench ledger after hundreds of thousands of
-  loaded transfers: **global Σ = 0, 0 unbalanced transfers, 0 negative real-account balances, 0 duplicate
-  postings**. `ConcurrentDebitIT` (direct-handler 8-thread overdraft) stays green.
-- **The batched money path is STRICTER than per-record** (each later same-source posting's SUM sees the
-  earlier uncommitted in-batch entries), not weaker. `synchronous_commit=on` for the money DBs, `acks=all` +
-  idempotent producer, per-record inbox dedup, the per-posting `saveAndFlush` anchor, and the BANK-11 source
-  lock are all **unchanged**. **No sharding.**
-- A rejection emits `posting-rejected` as a normal result and **never** rolls back its posted siblings; only
-  a true infra error fails the batch (commit-up-to-i + idempotent re-drive via anchor + reconciler).
+- **The revert removes a latent loss bug**, not just complexity: per-record processing means **one record =
+  one tx = one offset**, so there is **no batch boundary** across which a committed offset can outlive a
+  rolled-back DB write. A failure rolls back **and** re-drives exactly that record (inbox + posting-PK anchor
+  make the re-drive idempotent); a true poison is isolated to the **DLT**.
+- **Overdraft impossible, verified two ways:** `SameSourcePostingOverdraftIT` (8-deep same-source burst,
+  per-record → 5 post / 3 reject / balance 0, never negative) **and** the post-bench ledger after hundreds of
+  thousands of loaded transfers: **global Σ = 0, 0 unbalanced transfers, 0 negative real-account balances, 0
+  duplicate postings**. `ConcurrentDebitIT` (direct-handler 8-thread overdraft) stays green.
+- **All money guards unchanged:** the BANK-11 `findByIdForUpdate` source lock, the posting-PK anchor,
+  `inbox.firstTime`, Σ=0, `synchronous_commit=on` for the money DBs, `acks=all` + idempotent producer. **No
+  sharding.** The money-safe fsync efficiency is **Postgres group-commit** batching WAL fsyncs across
+  concurrent per-record commits — at the database level, not in the application.
 
 ### 11.6 Co-located caveat
 
