@@ -175,11 +175,15 @@ acme:
       velocity-window: ${FAST_PATH_VELOCITY_WINDOW:1m}
       accounts:
         base-url: ${ACCOUNTS_BASE_URL:http://localhost:8083}
-        # SHORT timeouts so a slow accounts does not pin a request thread. A read timeout surfaces as
-        # ResourceAccessException → the sync client's UNKNOWN path → the transfer is left POSTING for the
-        # reconciler (never a guessed terminal).
-        connect-timeout: ${FAST_PATH_CONNECT_TIMEOUT:500ms}
-        read-timeout: ${FAST_PATH_READ_TIMEOUT:2s}
+        # BANK-22 Fix 3: TIGHT timeouts. The sync call runs INSIDE the transfers StronglyConsistent DB tx,
+        # so it holds a Hikari connection for the call's whole duration — under accounts slowness this would
+        # pin connections. Bounding connect (~200ms) + read (~500ms) keeps the worst-case connection-hold
+        # small; a read timeout surfaces as ResourceAccessException → the sync client's UNKNOWN path → the
+        # transfer is left POSTING for the reconciler (never a guessed terminal). Persistent slowness trips
+        # the circuit breaker fast → NOT_MADE → async fallback, so connections are never held on a down
+        # accounts (see ADR-0032: connection-hold trade-off).
+        connect-timeout: ${FAST_PATH_CONNECT_TIMEOUT:200ms}
+        read-timeout: ${FAST_PATH_READ_TIMEOUT:500ms}
 
 resilience4j:
   circuitbreaker:
@@ -199,6 +203,10 @@ resilience4j:
         failure-rate-threshold: 50
         wait-duration-in-open-state: 5s
         permitted-number-of-calls-in-half-open-state: 3
+        # BANK-22 Fix 3: evaluate the failure rate as soon as the sliding window fills (default 100 would
+        # hold ~100 in-tx connections on a down accounts before the breaker could open). 10 trips the
+        # breaker FAST → NOT_MADE → async fallback, bounding how many requests hold a connection.
+        minimum-number-of-calls: 10
         # A 4xx is a deterministic client error, not an accounts-side fault: don't trip the circuit.
         ignore-exceptions:
           - org.springframework.web.client.HttpClientErrorException
@@ -209,10 +217,15 @@ resilience4j:
         wait-duration: 200ms
         ignore-exceptions:
           - org.springframework.web.client.HttpClientErrorException
-      # Retrying a timed-out money-post is SAFE: the accounts posting-PK anchor dedups by transferId, so at
-      # most one posting exists. A 4xx is a deterministic client error — never retried.
+      # BANK-22 Fix 3: max-attempts 1 (NO retry amplification). The sync call holds a Hikari connection for
+      # its whole duration inside the StronglyConsistent tx; a retry would multiply the worst-case
+      # connection-hold. One attempt + tight timeouts bound the hold, and the circuit breaker (→ NOT_MADE →
+      # async fallback) handles persistent slowness — the reconciler/async saga drives recovery, not inline
+      # retries. (Retrying a timed-out money-post would itself be SAFE — the accounts posting-PK anchor
+      # dedups by transferId — but it is not worth the extra connection-hold on the hot path.) A 4xx is a
+      # deterministic client error — never retried regardless.
       accounts-sync:
-        max-attempts: 2
+        max-attempts: 1
         wait-duration: 100ms
         ignore-exceptions:
           - org.springframework.web.client.HttpClientErrorException

@@ -13,9 +13,11 @@ import org.springframework.web.client.RestClient;
  * ({@code POST /internal/postings}). The endpoint is network-internal and permits no bearer, so no
  * token relay is needed.
  *
- * <p>Connect/read timeouts are SHORT and bounded so a slow accounts does not block a request thread:
- * a read timeout surfaces as {@code ResourceAccessException} → the sync client's UNKNOWN path → the
- * transfer is left {@code POSTING} for the reconciler (never a guessed terminal).
+ * <p>Connect/read timeouts are TIGHT and bounded (BANK-22 Fix 3): the sync call runs inside the
+ * transfers {@code StronglyConsistent} DB tx and holds a Hikari connection for its whole duration, so a
+ * slow accounts must not hold the connection long. A read timeout surfaces as
+ * {@code ResourceAccessException} → the sync client's UNKNOWN path → the transfer is left {@code POSTING}
+ * for the reconciler (never a guessed terminal); persistent slowness trips the breaker → async fallback.
  */
 @Configuration
 public class AccountsPostingSyncClientConfig {
@@ -25,8 +27,8 @@ public class AccountsPostingSyncClientConfig {
         /** Base URL of the accounts service (its {@code /internal/**} surface). */
         private String baseUrl = "http://localhost:8083";
 
-        private Duration connectTimeout = Duration.ofMillis(500);
-        private Duration readTimeout = Duration.ofSeconds(2);
+        private Duration connectTimeout = Duration.ofMillis(200);
+        private Duration readTimeout = Duration.ofMillis(500);
 
         public String getBaseUrl() {
             return baseUrl;
