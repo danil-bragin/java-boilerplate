@@ -26,4 +26,18 @@ final class AccountDtos {
 
     /** Internal money-truth view: whether a posting exists for a transfer in the ledger. */
     record PostingStatusView(String transferId, boolean posted) {}
+
+    /**
+     * Internal synchronous posting request (transfers fast-path). Routes to the SAME
+     * {@code PostTransferCommand}/{@code PostTransferHandler} as the async saga, so it inherits the
+     * lock + Σ=0 + posting-PK anchor money guarantees and is idempotent by {@code transferId}.
+     */
+    record PostTransferRequest(
+            @NotBlank String transferId,
+            @NotBlank String sourceAccountId,
+            @NotBlank String destinationAccountId,
+            @Valid MoneyView amount) {}
+
+    /** Synchronous posting outcome: {@code status} is POSTED or REJECTED ({@code reason} set when rejected). */
+    record PostTransferResultView(String transferId, String status, String reason) {}
 }
