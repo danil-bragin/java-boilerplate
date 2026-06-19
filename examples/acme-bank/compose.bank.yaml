@@ -182,7 +182,10 @@ services:
       # Activates acme-web's RedisIdempotencyStore so idempotency holds across gateway replicas.
       SPRING_DATA_REDIS_HOST: redis
       SPRING_DATA_REDIS_PORT: "6379"
-      TRANSFERS_BASE_URL: http://transfers:8080
+      # BANK-21: point at the transfers LB (nginx round-robin over the transfers replicas) instead of the
+      # bare `transfers` service name — the gateway's RestClient keepalive pool would otherwise pin to one
+      # replica. The LB spreads each gateway->transfers POST across all `--scale transfers=N` replicas.
+      TRANSFERS_BASE_URL: http://transfers-lb:80
       ACCOUNTS_BASE_URL: http://accounts:8080
     # BANK-20: NO host port — nginx (below) is the only published edge so the gateway can scale to N
     # replicas (`docker compose --scale gateway=N`) without host :8080 collisions. Reachable in-network
@@ -222,6 +225,13 @@ services:
     # BANK-20: transfers was the RAM co-limiter at the BANK-19b knee (768m mem_limit -> ~576m heap). On the
     # 24 GiB VM raise it to 2g so the transfers JVM heap (-> ~1.5g) isn't the co-ceiling once gateway CPU is
     # relieved by the replicas. It is the first downstream the scaled-out edge pushes harder.
+    #
+    # BANK-21: transfers is now the BANK-20 bottleneck and is STATELESS on the accept side (the POST is an
+    # idempotent insert keyed by Idempotency-Key; saga state is in Postgres; the consume-side distributes
+    # across replicas via the `transfers` consumer group). So it is horizontally scalable:
+    # `docker compose --scale transfers=N` behind the `transfers-lb` nginx LB below. It has NO host port
+    # (in-network only at transfers:8080), so N replicas don't fight over a host port — Docker DNS resolves
+    # `transfers` to every replica IP for the LB's round-robin upstream.
     mem_limit: 2g
     deploy:
       resources:
@@ -231,6 +241,7 @@ services:
       postgres: {condition: service_healthy}
       redpanda: {condition: service_healthy}
       keycloak: {condition: service_healthy}
+    expose: ["8080"]
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/transfers
       SPRING_DATASOURCE_USERNAME: acme
@@ -239,12 +250,33 @@ services:
       SCHEMA_REGISTRY_URL: http://redpanda:8081
       OAUTH2_ISSUER_URI: http://keycloak:8080/realms/bank
       OTEL_OTLP_TRACES_ENDPOINT: http://observability:4318/v1/traces
+      ACCOUNTS_BASE_URL: http://accounts:8080
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- localhost:8080/actuator/health/readiness | grep -q UP"]
       interval: 10s
       timeout: 5s
       retries: 20
       start_period: 30s
+
+  # BANK-21: nginx round-robin load balancer in front of the N stateless transfers replicas. The gateway's
+  # RestClient (TRANSFERS_BASE_URL=http://transfers-lb:80) hits this; nginx spreads each POST across all
+  # `--scale transfers=N` replicas over a pooled keepalive connection (mirrors the BANK-20 gateway LB,
+  # passes Authorization + Idempotency-Key verbatim). Config in ./nginx/transfers.conf. No host port — it
+  # is an internal LB on the gateway->transfers hop only.
+  transfers-lb:
+    image: nginx:1.27-alpine
+    mem_limit: 256m
+    depends_on:
+      transfers: {condition: service_healthy}
+    volumes:
+      - ./nginx/transfers.conf:/etc/nginx/nginx.conf:ro
+    expose: ["80"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- 127.0.0.1:80/ | grep -q ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
 
   accounts:
     build:
