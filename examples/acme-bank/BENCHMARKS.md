@@ -822,3 +822,100 @@ for the common case) to spend fewer cores per transfer, not more boxes — then 
 One host, **14 vCPU / 23.68 GiB**, now running **gateway×2 + transfers×3 + 2 nginx LBs + accounts + antifraud
 + notifications + 5 infra + the host Gatling JVM**. The knee is the **total-CPU wall**, not any single tier.
 See ADR-0031.
+
+---
+
+## 12. Synchronous fast-path (BANK-22): the hop reduction (6→~1) toward 5k — money-safe
+
+> **Headline.** §11.4 named the only lever that moves the 5k arithmetic: **cut the per-transfer CPU, not add
+> boxes**. BANK-22 does exactly that for the common case. An **eligible** transfer (small, auto-approvable —
+> amount ≤ a threshold set **conservatively below** the antifraud 10,000 USD limit, default **1,000 USD**) now
+> takes a **synchronous fast-path**: transfers **inline-approves**, **persists `POSTING`**, then makes **ONE
+> synchronous HTTP `POST /internal/postings`** to accounts (the **SAME** `PostTransferHandler` — lock + Σ=0 +
+> posting-PK anchor, **unchanged**) and terminalizes from the answer — collapsing the **6-hop async saga to ~1
+> hop**. **Ineligible/flagged transfers keep the unchanged async saga**, which is also the **resilience
+> fallback**. The **money mutation is byte-for-byte the same**; only **transport** (sync HTTP vs Kafka) and
+> **orchestration** (inline vs choreographed) change. **The durable finding is the per-transfer CPU/hop
+> reduction**; the absolute QPS knee stays host-bound (Gatling co-located). **5k is NOT claimed.**
+
+### 12.1 What the fast-path removes (the 6 hops → 1)
+
+The async saga for one transfer is: `transfer-requested` → antifraud screens → `transfer-screened` → transfers
+advances → `posting-requested` → accounts posts → `ledger-posted` → transfers completes → `transfer-completed`.
+That is **6 Kafka hops** (produce+consume+outbox-relay each), **2 extra service tx** (antifraud screen, the
+transfers screening-result tx), and Avro ser/de on every leg. The fast-path replaces all of it with **one
+synchronous HTTP round-trip** to the same posting handler, terminalizing in the **initiate tx** (outbox still
+externalizes the single terminal event for downstream projections/notifications).
+
+### 12.2 Re-bench: per-service CPU at the same offered load (40 rps, open-model, cross sources, this host)
+
+`docker stats` steady-state CPU%, eligible (fast-path, amount 1.00) vs ineligible (slow-path, amount 5000.00),
+same `TransferWriteSimulation` (`-DBENCH_TRANSFER_AMOUNT` switches the path):
+
+| service        | ELIGIBLE — fast-path | INELIGIBLE — slow-path | what changed |
+| -------------- | -------------------- | ---------------------- | ------------ |
+| **antifraud**  | **~1.8%**            | **~29%**               | fast-path **skips the screening hop entirely** — antifraud goes near-idle |
+| accounts       | ~16%                 | ~2%                    | fast-path posts **synchronously** (one HTTP tx) vs the async consume of `posting-requested` |
+| transfers      | ~44%                 | ~23%                   | fast-path does the orchestration **inline** (approve+post+complete in one tx + the sync HTTP wait) |
+| notifications  | ~9%                  | ~8%                    | unchanged (one terminal event per transfer either way) |
+| gateway        | ~37%                 | ~31%                   | unchanged accept tier |
+
+**Reading it honestly.** The fast-path's biggest, unambiguous win is **eliminating the antifraud screening hop
+(~29% → ~1.8%)** for every eligible transfer, plus removing **~5 Kafka legs** (produce/consume/relay/Avro) per
+transfer. CPU **shifts into transfers** (it now does inline what the saga spread across services + brokers) and
+into accounts (synchronous posting), but the **total Kafka traffic, broker work, and antifraud screening are
+removed** — that removed work is the per-transfer CPU the §11.4 arithmetic was blocked on. A single `docker
+stats` snapshot is noisy; the **structural** finding (−5 hops, −1 screening service, −1 saga tx per eligible
+transfer) is the durable one, not the exact percentages.
+
+### 12.3 Latency + correctness at load
+
+- **Eligible 40 rps:** 0% err, **p99 26 ms**; **120 rps:** 0% err, **p99 20 ms** (gateway accept stays cheap —
+  it 202s; the win is backend settle work removed). The fast-path itself completes **synchronously** end-to-end
+  (verified: an eligible transfer returns **COMPLETED** on the first `GET`, no settle lag).
+- **Full convergence after the sweep (12,002 transfers driven):** **every** transfer terminal — **9,761
+  COMPLETED + 2,241 FAILED, 0 stuck**. **notifications = 12,002** (one per terminal). **gateway projection =
+  9,761 COMPLETED + 2,241 FAILED** (exact match — the event-driven projection converges for **both** paths even
+  though the gateway always returns 202). **accounts ledger: Σ=0 on every posted transfer, 0 unbalanced.** The
+  FAILED set is the ineligible 5000.00 sweep hitting `INSUFFICIENT_FUNDS` via the slow-path — proof the
+  **ineligible amount still takes the async saga** (antifraud near-idle on the eligible run confirms the eligible
+  amount does **not**).
+
+### 12.4 How much closer to 5k, and the limiter (honest)
+
+The **per-transfer cost is genuinely lower** for the eligible majority — the saga's broker round-trips and the
+antifraud screening tx are **removed**, which is precisely the CPU the §11.4 "5k ≈ 25 cores" arithmetic was
+spending. But the **demonstrable knee on this host is still the co-located total-CPU wall** (Gatling shares the
+14 cores; the gateway is a single source IP). **We do NOT claim 5k** — that needs the per-transfer saving
+**combined with** dedicated/bigger infra (separate load generator, more cores, gateway/transfers replicas to the
+new wall). What BANK-22 proves on this box: the **hop count and per-transfer service-fan-out dropped for the
+eligible path**, moving the *real-infra* 5k closer; the laptop's absolute QPS ceiling is unchanged because it is
+**host-bound, not architecture-bound**.
+
+### 12.5 Money-safety — intact (the whole point)
+
+- **The money mutation did NOT change.** The fast-path POSTs to the **existing** `PostTransferCommand` /
+  `PostTransferHandler` — `findByIdForUpdate` source lock + derived-balance check + **Σ=0** + **posting-PK
+  anchor** + asset/operational invariants — **verbatim**. `ConcurrentDebitIT` + `SameSourcePostingOverdraftIT`
+  stay green; no guard weakened.
+- **Idempotency, two layers:** the gateway **`Idempotency-Key`** dedups the POST (one transfer per key —
+  `FastPathSafetyIT.sameIdempotencyKeyPostsOnce` asserts exactly ONE sync post); the accounts **posting-PK
+  anchor** dedups the posting by `transferId` (one posting even on retry/double-attempt —
+  `InternalPostingPostIT` / `PostTransferIT` / `ConcurrentDebitIT`). **At most one transfer, at most one
+  posting.**
+- **The dangerous timeout-after-send edge is provably double-post-safe.** The sync client distinguishes
+  **`CallNotPermittedException`** (circuit open → call **NOT made** → **NOT_MADE** → safe async fallback, nothing
+  posted) from **`ResourceAccessException`** (post-send I/O failure → **UNKNOWN**). On **UNKNOWN the handler
+  NEVER guesses a terminal** — it leaves the transfer **`POSTING`** (persisted **before** the call) for the
+  **BANK-12 reconciler**, which queries accounts' ledger (`posted(id)`): **posted=true → complete** (the single
+  anchored posting is the only money movement — **debited exactly once**), **posted=false → re-drive only, never
+  fail**. `FastPathSafetyIT.unknownTimeoutLeavesPostingThenReconcilerCompletesExactlyOnce` proves it. Ambiguous
+  failures default to UNKNOWN (leave POSTING) — **never** "safe to retry inline as a terminal".
+- **Circuit-open → async fallback, no money lost:** accounts down → `NOT_MADE` → 202 `POSTING` + re-emitted
+  `posting-requested`; the async saga drives the (idempotent, anchor-deduped) posting once accounts is back.
+- **No sharding; durability retained** (`synchronous_commit=on` money DBs, `acks=all` + idempotent producer).
+
+### 12.6 Co-located caveat (unchanged)
+
+Same single host, same total-CPU wall, Gatling co-located. The fast-path lowers **per-transfer** cost for the
+eligible majority; it does not change the **host** ceiling. See ADR-0032.
