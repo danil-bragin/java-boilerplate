@@ -28,4 +28,14 @@ interface TransferJpaRepository extends JpaRepository<TransferJpaEntity, String>
             + "and t.updatedAt < :cutoff order by t.updatedAt asc")
     List<TransferJpaEntity> findStuck(
             @Param("statuses") List<String> statuses, @Param("cutoff") Instant cutoff, Pageable pageable);
+
+    /**
+     * BANK-22 Fix 1: count a source account's RECENT transfers (created since {@code since}) in transfers'
+     * OWN DB. Drives the per-source fast-path velocity guard so a high-velocity source is routed to the
+     * async screened slow-path instead of bypassing antifraud velocity. Backed by
+     * {@code idx_transfer_source_created (source_account_id, created_at)}.
+     */
+    @Query("select count(t) from TransferJpaEntity t "
+            + "where t.sourceAccountId = :sourceAccountId and t.createdAt > :since")
+    long countBySourceSince(@Param("sourceAccountId") String sourceAccountId, @Param("since") Instant since);
 }

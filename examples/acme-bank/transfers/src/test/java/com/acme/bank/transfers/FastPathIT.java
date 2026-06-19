@@ -51,7 +51,10 @@ import org.testcontainers.redpanda.RedpandaContainer;
  */
 @SpringBootTest(
         properties = {
-            "spring.autoconfigure.exclude=", // keep security so jwt() applies
+            // Keep the base test-yaml Redis exclusions (otherwise acme-web wires RedisIdempotencyStore,
+            // which the now-required Idempotency-Key headers would exercise against a non-existent Redis).
+            "spring.autoconfigure.exclude=org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration,"
+                    + "org.springframework.boot.autoconfigure.data.redis.RedisRepositoriesAutoConfiguration",
             "acme.bank.fast-path.enabled=true",
             "acme.bank.fast-path.max-amount=1000.00",
             "acme.bank.reconciler.fixed-delay=PT1H"

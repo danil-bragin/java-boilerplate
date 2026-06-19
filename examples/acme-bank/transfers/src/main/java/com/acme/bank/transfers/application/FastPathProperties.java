@@ -3,6 +3,7 @@ package com.acme.bank.transfers.application;
 import com.acme.money.Asset;
 import com.acme.money.Money;
 import java.math.BigDecimal;
+import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
@@ -22,6 +23,19 @@ public class FastPathProperties {
 
     /** Asset the threshold is denominated in. Cross-asset transfers are never fast-path-eligible. */
     private String maxAmountAsset = "USD";
+
+    /**
+     * BANK-22 Fix 1: max per-source velocity that may still take the fast-path. The fast-path skips
+     * antifraud screening, so it records no screening_decision → the antifraud VELOCITY rule is blind to
+     * fast-pathed transfers. To stop an unbounded N × ≤threshold drain from one source, transfers counts
+     * the source's recent transfers in its OWN DB; once the count reaches this cap the transfer is NO
+     * LONGER fast-path-eligible and is routed to the async slow-path (full antifraud screening, which DOES
+     * record + enforce velocity). Default 5 — aligned to the antifraud {@code maxVelocity}.
+     */
+    private int maxVelocityPerSource = 5;
+
+    /** Sliding window over which the per-source velocity is counted (created_at &gt; now() - window). */
+    private Duration velocityWindow = Duration.ofMinutes(1);
 
     public boolean isEnabled() {
         return enabled;
@@ -45,6 +59,22 @@ public class FastPathProperties {
 
     public void setMaxAmountAsset(String maxAmountAsset) {
         this.maxAmountAsset = maxAmountAsset;
+    }
+
+    public int getMaxVelocityPerSource() {
+        return maxVelocityPerSource;
+    }
+
+    public void setMaxVelocityPerSource(int maxVelocityPerSource) {
+        this.maxVelocityPerSource = maxVelocityPerSource;
+    }
+
+    public Duration getVelocityWindow() {
+        return velocityWindow;
+    }
+
+    public void setVelocityWindow(Duration velocityWindow) {
+        this.velocityWindow = velocityWindow;
     }
 
     /**

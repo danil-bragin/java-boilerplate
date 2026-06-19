@@ -54,6 +54,11 @@ class JpaTransfers implements Transfers {
     }
 
     @Override
+    public long countBySourceSince(String sourceAccountId, Instant since) {
+        return repository.countBySourceSince(sourceAccountId, since);
+    }
+
+    @Override
     public List<Transfer> query(String accountId, TransferStatus status, int page, int size) {
         String statusName = status == null ? null : status.name();
         return repository.query(accountId, statusName, PageRequest.of(page, size)).stream()

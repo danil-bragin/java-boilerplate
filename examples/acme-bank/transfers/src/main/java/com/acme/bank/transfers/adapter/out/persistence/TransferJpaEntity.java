@@ -37,6 +37,13 @@ class TransferJpaEntity {
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
+    /**
+     * Creation timestamp — DB-managed (DEFAULT now()); Hibernate never writes it so an update never
+     * resets it. Drives the per-source fast-path velocity count (BANK-22 Fix 1).
+     */
+    @Column(name = "created_at", nullable = false, insertable = false, updatable = false)
+    private Instant createdAt;
+
     protected TransferJpaEntity() {}
 
     TransferJpaEntity(

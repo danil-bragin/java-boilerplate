@@ -165,6 +165,14 @@ acme:
       # antifraud would auto-approve anyway — the fast-path may safely skip the screening hop.
       max-amount: ${FAST_PATH_MAX_AMOUNT:1000.00}
       max-amount-asset: ${FAST_PATH_MAX_AMOUNT_ASSET:USD}
+      # BANK-22 Fix 1: per-source fast-path velocity cap. The fast-path skips antifraud screening, so it
+      # records no screening_decision → the antifraud VELOCITY rule is blind to fast-pathed transfers. To
+      # stop an unbounded N × ≤threshold drain from one source, transfers counts the source's recent
+      # transfers in its OWN DB; at/above this cap the transfer is NO LONGER fast-path-eligible and is routed
+      # to the async slow-path (full antifraud screening, which records + enforces velocity). Default 5 —
+      # aligned to the antifraud maxVelocity. Counted over the sliding velocity-window.
+      max-velocity-per-source: ${FAST_PATH_MAX_VELOCITY_PER_SOURCE:5}
+      velocity-window: ${FAST_PATH_VELOCITY_WINDOW:1m}
       accounts:
         base-url: ${ACCOUNTS_BASE_URL:http://localhost:8083}
         # SHORT timeouts so a slow accounts does not pin a request thread. A read timeout surfaces as

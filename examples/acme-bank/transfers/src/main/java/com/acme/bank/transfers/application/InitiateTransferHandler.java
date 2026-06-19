@@ -10,6 +10,7 @@ import com.acme.bank.transfers.domain.TransferCompletedEvent;
 import com.acme.bank.transfers.domain.TransferFailedEvent;
 import com.acme.bank.transfers.domain.TransferId;
 import com.acme.bank.transfers.domain.Transfers;
+import java.time.Instant;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -79,14 +80,39 @@ public class InitiateTransferHandler implements Command.Handler<InitiateTransfer
         Transfer transfer = Transfer.request(
                 id, command.sourceAccountId(), command.destinationAccountId(), command.amount(), command.requestedBy());
 
-        if (fastPath.isEligible(command.amount())) {
+        if (fastPath.isEligible(command.amount()) && withinVelocityCap(command.sourceAccountId())) {
             return fastPath(command, transfer);
         }
 
-        // Slow-path (unchanged): persist REQUESTED, kick the async saga.
+        // Slow-path (unchanged): persist REQUESTED, kick the async saga. Reached when ineligible/flag-off
+        // OR when the source is over the per-source fast-path velocity cap — that source gets the FULL
+        // antifraud screening (records screening_decision + enforces velocity) it would otherwise bypass.
         transfers.save(transfer);
         events.publishEvent(transfer.toRequestedEvent());
         return InitiateTransferResult.requested(id.value());
+    }
+
+    /**
+     * BANK-22 Fix 1 — per-source fast-path velocity guard. The fast-path skips antifraud screening, so it
+     * leaves no {@code screening_decision} row and the antifraud VELOCITY rule is BLIND to fast-pathed
+     * transfers. Without a ceiling a source could run unbounded N × ≤threshold transfers with no velocity
+     * limit. So before fast-pathing we count the source's recent transfers in transfers' OWN DB; once that
+     * reaches the cap the transfer is no longer fast-path-eligible → it falls through to the async
+     * slow-path, which DOES screen (and enforce velocity). Normal low-velocity sources stay fast; a
+     * high-velocity (potentially fraudulent) source is forced onto the screened path.
+     */
+    private boolean withinVelocityCap(String sourceAccountId) {
+        Instant since = Instant.now().minus(fastPath.getVelocityWindow());
+        long recent = transfers.countBySourceSince(sourceAccountId, since);
+        if (recent >= fastPath.getMaxVelocityPerSource()) {
+            log.info(
+                    "fast-path: source {} at velocity {} (cap {}) — routing to async screened slow-path",
+                    sourceAccountId,
+                    recent,
+                    fastPath.getMaxVelocityPerSource());
+            return false;
+        }
+        return true;
     }
 
     private InitiateTransferResult fastPath(InitiateTransferCommand command, Transfer transfer) {
