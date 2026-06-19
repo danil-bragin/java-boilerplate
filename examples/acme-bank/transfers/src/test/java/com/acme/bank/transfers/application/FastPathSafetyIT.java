@@ -154,7 +154,7 @@ class FastPathSafetyIT {
     void unknownTimeoutLeavesPostingThenReconcilerCompletesExactlyOnce() throws Exception {
         when(sync.post(any())).thenReturn(SyncPostResult.unknown());
 
-        String resp = initiate(null, "100.00", 202);
+        String resp = initiate("safety-unknown-posted", "100.00", 202);
         JsonNode json = mapper.readTree(resp);
         String id = json.get("transferId").asText();
         // The handler did NOT guess a terminal — it left the transfer POSTING for the reconciler.
@@ -182,8 +182,9 @@ class FastPathSafetyIT {
     void unknownTimeoutNotPostedReconcilerReDrivesNeverFails() throws Exception {
         when(sync.post(any())).thenReturn(SyncPostResult.unknown());
 
-        String id =
-                mapper.readTree(initiate(null, "100.00", 202)).get("transferId").asText();
+        String id = mapper.readTree(initiate("safety-unknown-notposted", "100.00", 202))
+                .get("transferId")
+                .asText();
         assertThat(statusOf(id)).isEqualTo("POSTING");
 
         when(reconcileClient.posted(id)).thenReturn(Optional.of(false));
@@ -198,7 +199,7 @@ class FastPathSafetyIT {
     void circuitOpenFallsBackToAsyncNoTerminal() throws Exception {
         when(sync.post(any())).thenReturn(SyncPostResult.notMade());
 
-        String resp = initiate(null, "100.00", 202);
+        String resp = initiate("safety-notmade", "100.00", 202);
         JsonNode json = mapper.readTree(resp);
         String id = json.get("transferId").asText();
         assertThat(json.get("status").asText()).isEqualTo("POSTING");
@@ -211,7 +212,7 @@ class FastPathSafetyIT {
     void overdraftRejectedFailsNoMoney() throws Exception {
         when(sync.post(any())).thenReturn(SyncPostResult.rejected("INSUFFICIENT_FUNDS"));
 
-        String resp = initiate(null, "100.00", 200);
+        String resp = initiate("safety-overdraft", "100.00", 200);
         JsonNode json = mapper.readTree(resp);
         String id = json.get("transferId").asText();
         assertThat(json.get("status").asText()).isEqualTo("FAILED");

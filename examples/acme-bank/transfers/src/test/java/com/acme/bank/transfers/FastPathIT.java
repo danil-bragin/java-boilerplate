@@ -107,6 +107,7 @@ class FastPathIT {
 
         String resp = mvc.perform(post("/v1/transfers")
                         .with(jwt())
+                        .header("Idempotency-Key", "fp-posted-1")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body("100.00")))
                 .andExpect(status().isOk())
@@ -126,6 +127,7 @@ class FastPathIT {
 
         String resp = mvc.perform(post("/v1/transfers")
                         .with(jwt())
+                        .header("Idempotency-Key", "fp-rejected-1")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body("100.00")))
                 .andExpect(status().isOk())
@@ -144,6 +146,7 @@ class FastPathIT {
     void ineligibleAmountUsesSlowPath() throws Exception {
         mvc.perform(post("/v1/transfers")
                         .with(jwt())
+                        .header("Idempotency-Key", "fp-ineligible-1")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body("5000.00")))
                 .andExpect(status().isAccepted())

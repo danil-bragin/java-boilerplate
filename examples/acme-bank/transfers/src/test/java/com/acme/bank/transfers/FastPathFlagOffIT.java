@@ -40,6 +40,7 @@ class FastPathFlagOffIT {
     void flagOffForcesSlowPathEvenForEligibleAmount() throws Exception {
         mvc.perform(post("/v1/transfers")
                         .with(jwt())
+                        .header("Idempotency-Key", "flag-off-1")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"sourceAccountId\":\"a\",\"destinationAccountId\":\"b\","
                                 + "\"amount\":\"100.00\",\"asset\":\"USD\"}"))

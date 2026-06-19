@@ -55,6 +55,7 @@ class TransferApiIT {
     void initiatesTransfer() throws Exception {
         mvc.perform(post("/v1/transfers")
                         .with(jwt())
+                        .header("Idempotency-Key", "api-initiate-1")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(VALID))
                 .andExpect(status().isAccepted())
@@ -67,6 +68,7 @@ class TransferApiIT {
         String bad = "{\"sourceAccountId\":\"a\",\"destinationAccountId\":\"b\",\"amount\":\"\",\"asset\":\"USD\"}";
         mvc.perform(post("/v1/transfers")
                         .with(jwt())
+                        .header("Idempotency-Key", "api-invalid-1")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(bad))
                 .andExpect(status().isBadRequest())
@@ -109,6 +111,7 @@ class TransferApiIT {
     void getsStatus() throws Exception {
         String body = mvc.perform(post("/v1/transfers")
                         .with(jwt())
+                        .header("Idempotency-Key", "api-getstatus-1")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(VALID))
                 .andReturn()

@@ -11,6 +11,7 @@ import com.acme.money.Assets;
 import com.acme.money.Money;
 import com.acme.web.error.ApiException;
 import jakarta.validation.Valid;
+import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -21,6 +22,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -40,8 +42,19 @@ public class TransferController {
     }
 
     @PostMapping
-    public ResponseEntity<Map<String, Object>> initiate(@Valid @RequestBody CreateTransferRequest request) {
-        String transferId = UUID.randomUUID().toString();
+    public ResponseEntity<Map<String, Object>> initiate(
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+            @Valid @RequestBody CreateTransferRequest request) {
+        // Require the Idempotency-Key server-side (the OpenAPI marks it required) and DERIVE a stable
+        // transferId from it. Even if two same-key requests reach transfers (edge filter bypassed,
+        // cross-instance, or transfers replicated) they mint the SAME transferId → the existing-row check
+        // here + the accounts posting-PK anchor dedup → exactly one transfer and one posting. Correctness
+        // rests on the anchor (a DB invariant), not solely on the in-memory filter cache.
+        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+            throw new ApiException(TransferErrorCode.IDEMPOTENCY_KEY_REQUIRED);
+        }
+        String transferId = UUID.nameUUIDFromBytes(idempotencyKey.getBytes(StandardCharsets.UTF_8))
+                .toString();
         Money amount = Money.of(request.amount(), Assets.of(request.asset()));
         InitiateTransferResult result = pipeline.send(new InitiateTransferCommand(
                 transferId, request.sourceAccountId(), request.destinationAccountId(), amount, "api"));
