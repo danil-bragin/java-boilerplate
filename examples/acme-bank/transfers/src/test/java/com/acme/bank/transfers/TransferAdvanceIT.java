@@ -292,6 +292,59 @@ class TransferAdvanceIT {
         }
     }
 
+    @Test
+    void batchOfScreeningResultsAllAdvanceAndRedeliveryDedups() {
+        // BANK-21: a single poll batch carrying many screening results — keyed by the SAME source account
+        // (acc-src) so they co-partition and arrive in ONE batch — must advance EVERY transfer, and a
+        // redelivered result inside the batch must NOT double-advance (per-record inbox dedup in the loop).
+        String bootstrap = redpanda.getBootstrapServers().replaceFirst(".*://", "");
+        String srUrl = redpanda.getSchemaRegistryAddress();
+
+        int n = 6;
+        for (int i = 0; i < n; i++) {
+            seedTransfer("advance-it-batch-" + i, "REQUESTED");
+        }
+
+        try (Producer<String, TransferScreened> producer = newProducer(bootstrap, srUrl)) {
+            for (int i = 0; i < n; i++) {
+                String transferId = "advance-it-batch-" + i;
+                producer.send(new ProducerRecord<>(
+                        "transfer-screened",
+                        "acc-src", // SAME key → one partition → one batch (mirrors BANK-15 source keying)
+                        TransferScreened.newBuilder()
+                                .setTransferId(transferId)
+                                .setApproved(true)
+                                .build()));
+                if (i == n - 1) {
+                    // Redeliver the last one inside the same batch — the inbox must dedup it.
+                    producer.send(new ProducerRecord<>(
+                            "transfer-screened",
+                            "acc-src",
+                            TransferScreened.newBuilder()
+                                    .setTransferId(transferId)
+                                    .setApproved(true)
+                                    .build()));
+                }
+            }
+            producer.flush();
+        }
+
+        // Every transfer in the batch advanced to POSTING.
+        Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
+            Long posting = jdbc.queryForObject(
+                    "SELECT count(*) FROM transfer WHERE id LIKE 'advance-it-batch-%' AND status = 'POSTING'",
+                    Long.class);
+            assertThat(posting).isEqualTo((long) n);
+        });
+
+        // The redelivered transfer was inbox-deduped: exactly one processed_messages row for it.
+        Long dupInbox = jdbc.queryForObject(
+                "SELECT count(*) FROM processed_messages WHERE listener = 'transfers-screening' AND message_id = ?",
+                Long.class,
+                "advance-it-batch-" + (n - 1));
+        assertThat(dupInbox).isEqualTo(1L);
+    }
+
     private static <V> Producer<String, V> newProducer(String bootstrap, String srUrl) {
         Map<String, Object> props = new HashMap<>();
         props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap);
