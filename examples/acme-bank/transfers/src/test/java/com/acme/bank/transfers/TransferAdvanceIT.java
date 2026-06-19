@@ -293,10 +293,10 @@ class TransferAdvanceIT {
     }
 
     @Test
-    void batchOfScreeningResultsAllAdvanceAndRedeliveryDedups() {
-        // BANK-21: a single poll batch carrying many screening results — keyed by the SAME source account
-        // (acc-src) so they co-partition and arrive in ONE batch — must advance EVERY transfer, and a
-        // redelivered result inside the batch must NOT double-advance (per-record inbox dedup in the loop).
+    void burstOfScreeningResultsAllAdvanceAndRedeliveryDedups() {
+        // A burst of many screening results — keyed by the SAME source account (acc-src) so they
+        // co-partition and arrive in offset order — must advance EVERY transfer (each in its own per-record
+        // tx), and a redelivered result must NOT double-advance (the inbox dedups it).
         String bootstrap = redpanda.getBootstrapServers().replaceFirst(".*://", "");
         String srUrl = redpanda.getSchemaRegistryAddress();
 
@@ -310,13 +310,13 @@ class TransferAdvanceIT {
                 String transferId = "advance-it-batch-" + i;
                 producer.send(new ProducerRecord<>(
                         "transfer-screened",
-                        "acc-src", // SAME key → one partition → one batch (mirrors BANK-15 source keying)
+                        "acc-src", // SAME key → one partition → offset order (mirrors BANK-15 source keying)
                         TransferScreened.newBuilder()
                                 .setTransferId(transferId)
                                 .setApproved(true)
                                 .build()));
                 if (i == n - 1) {
-                    // Redeliver the last one inside the same batch — the inbox must dedup it.
+                    // Redeliver the last one — the inbox must dedup it.
                     producer.send(new ProducerRecord<>(
                             "transfer-screened",
                             "acc-src",
@@ -329,7 +329,7 @@ class TransferAdvanceIT {
             producer.flush();
         }
 
-        // Every transfer in the batch advanced to POSTING.
+        // Every transfer in the burst advanced to POSTING.
         Awaitility.await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {
             Long posting = jdbc.queryForObject(
                     "SELECT count(*) FROM transfer WHERE id LIKE 'advance-it-batch-%' AND status = 'POSTING'",
