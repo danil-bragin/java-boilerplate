@@ -19,7 +19,14 @@ import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
 
-@SpringBootTest(properties = "spring.kafka.listener.auto-startup=false")
+@SpringBootTest(
+        properties = {
+            "spring.kafka.listener.auto-startup=false",
+            // TransferApiIT is the async slow-path API contract (202 REQUESTED). Disable the BANK-22
+            // fast-path so the eligible (100.00) amount does not take the synchronous path — the fast-path
+            // has its own dedicated contract in FastPathIT / FastPathSafetyIT.
+            "acme.bank.fast-path.enabled=false"
+        })
 @AutoConfigureMockMvc
 @Import(PostgresTestcontainersConfiguration.class)
 class TransferApiIT {

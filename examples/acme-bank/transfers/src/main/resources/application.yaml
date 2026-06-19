@@ -157,6 +157,21 @@ acme:
       batch-size: 100
       accounts:
         base-url: ${ACCOUNTS_BASE_URL:http://localhost:8083}
+    # BANK-22 synchronous fast-path. An eligible (small, auto-approvable) transfer is posted SYNCHRONOUSLY
+    # to accounts (collapsing the 6-hop saga to ~1 hop). Ineligible/flag-off transfers keep the async saga.
+    fast-path:
+      enabled: ${FAST_PATH_ENABLED:true}
+      # Set CONSERVATIVELY below the antifraud amount-limit (10000 USD) so an eligible transfer is one
+      # antifraud would auto-approve anyway — the fast-path may safely skip the screening hop.
+      max-amount: ${FAST_PATH_MAX_AMOUNT:1000.00}
+      max-amount-asset: ${FAST_PATH_MAX_AMOUNT_ASSET:USD}
+      accounts:
+        base-url: ${ACCOUNTS_BASE_URL:http://localhost:8083}
+        # SHORT timeouts so a slow accounts does not pin a request thread. A read timeout surfaces as
+        # ResourceAccessException → the sync client's UNKNOWN path → the transfer is left POSTING for the
+        # reconciler (never a guessed terminal).
+        connect-timeout: ${FAST_PATH_CONNECT_TIMEOUT:500ms}
+        read-timeout: ${FAST_PATH_READ_TIMEOUT:2s}
 
 resilience4j:
   circuitbreaker:
@@ -169,10 +184,27 @@ resilience4j:
         # A 4xx is a deterministic client error, not an accounts-side fault: don't trip the circuit.
         ignore-exceptions:
           - org.springframework.web.client.HttpClientErrorException
+      # BANK-22 fast-path money-post. Opens when accounts is unhealthy so the fast-path falls back to the
+      # async saga (CallNotPermittedException → NOT_MADE) instead of hammering a down accounts on the hot path.
+      accounts-sync:
+        sliding-window-size: 10
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 5s
+        permitted-number-of-calls-in-half-open-state: 3
+        # A 4xx is a deterministic client error, not an accounts-side fault: don't trip the circuit.
+        ignore-exceptions:
+          - org.springframework.web.client.HttpClientErrorException
   retry:
     instances:
       accounts-reconcile:
         max-attempts: 3
         wait-duration: 200ms
+        ignore-exceptions:
+          - org.springframework.web.client.HttpClientErrorException
+      # Retrying a timed-out money-post is SAFE: the accounts posting-PK anchor dedups by transferId, so at
+      # most one posting exists. A 4xx is a deterministic client error — never retried.
+      accounts-sync:
+        max-attempts: 2
+        wait-duration: 100ms
         ignore-exceptions:
           - org.springframework.web.client.HttpClientErrorException

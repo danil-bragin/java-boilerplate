@@ -6,4 +6,4 @@ import com.acme.money.Money;
 
 public record InitiateTransferCommand(
         String transferId, String sourceAccountId, String destinationAccountId, Money amount, String requestedBy)
-        implements Command<String>, StronglyConsistent {}
+        implements Command<InitiateTransferResult>, StronglyConsistent {}

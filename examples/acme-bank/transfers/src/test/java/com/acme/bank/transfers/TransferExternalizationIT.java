@@ -37,7 +37,10 @@ import org.testcontainers.redpanda.RedpandaContainer;
             "spring.autoconfigure.exclude=com.acme.security.autoconfigure.SecurityAutoConfiguration",
             // Observation + W3C propagation must be on for the traceparent assertion below.
             "spring.kafka.template.observation-enabled=true",
-            "management.tracing.sampling.probability=1.0"
+            "management.tracing.sampling.probability=1.0",
+            // This IT asserts the async slow-path externalization (transfer-requested). Force the slow-path
+            // so the eligible (100.00) amount does not take the synchronous fast-path.
+            "acme.bank.fast-path.enabled=false"
         })
 @Import({
     PostgresTestcontainersConfiguration.class,
@@ -101,8 +104,9 @@ class TransferExternalizationIT {
         String bootstrap = redpanda.getBootstrapServers().replaceFirst(".*://", "");
         String srUrl = redpanda.getSchemaRegistryAddress();
 
-        String id = pipeline.send(
-                new InitiateTransferCommand("t-ext-1", "acc-src", "acc-dst", Money.of("100.00", Assets.USD), "alice"));
+        String id = pipeline.send(new InitiateTransferCommand(
+                        "t-ext-1", "acc-src", "acc-dst", Money.of("100.00", Assets.USD), "alice"))
+                .transferId();
         assertThat(id).isEqualTo("t-ext-1");
 
         try (Consumer<String, TransferRequested> consumer = newConsumer(bootstrap, srUrl, "transfer-ext-it")) {
