@@ -41,12 +41,14 @@ import org.springframework.test.context.DynamicPropertyRegistrar;
 import org.testcontainers.redpanda.RedpandaContainer;
 
 /**
- * BANK-21 NON-NEGOTIABLE money-safety gate for batching the ledger posting.
+ * Money-safety gate for the PER-RECORD ledger posting: a burst of same-source postings can never overdraw.
  *
  * <p>Produces 8 {@code posting-requested} for the SAME source account — keyed by that source accountId
- * (BANK-15), so they co-partition onto ONE partition, land in ONE poll batch, and are processed in ONE
- * transaction by the batch listener. The source is funded for exactly 5 of the 8 equal debits. The gate
- * asserts batching does NOT weaken overdraft prevention:
+ * (BANK-15), so they co-partition onto ONE partition and are consumed in offset order. Each record is its
+ * own {@code @Transactional} invocation with its own committed offset (the money-safe per-record shape; the
+ * BANK-21 batch-in-one-tx variant was reverted because a non-transactional container could commit offsets
+ * for records whose DB tx had been rolled back). The source is funded for exactly 5 of the 8 equal debits.
+ * The gate asserts overdraft is impossible under a same-source burst:
  *
  * <ul>
  *   <li>exactly 5 transfers post ({@code ledger-posted}); the other 3 are {@code posting-rejected}
@@ -56,18 +58,17 @@ import org.testcontainers.redpanda.RedpandaContainer;
  *   <li>exactly the 5 postings' entries are written (5 × 2 = 10 entries, 5 posting rows).
  * </ul>
  *
- * <p>This proves the in-tx serialization (each later posting's derived-balance SUM sees the earlier ones'
- * uncommitted entries within the one batch tx) makes overdraft impossible — in fact STRICTER than the
- * per-record path — and that a business rejection is a normal result emitting {@code posting-rejected},
- * NOT a batch rollback that would lose its successful siblings.
+ * <p>This proves the per-posting BANK-11 {@code findByIdForUpdate} source lock + derived-balance SUM
+ * serialize the same-source postings so overdraft is impossible, and that a business rejection is a normal
+ * result emitting {@code posting-rejected} (the handler returns, never throws), not a failure that drops it.
  */
 @SpringBootTest
 @Import({
     PostgresTestcontainersConfiguration.class,
     RedpandaTestcontainersConfiguration.class,
-    BatchOverdraftIT.SchemaRegistryProps.class
+    SameSourcePostingOverdraftIT.SchemaRegistryProps.class
 })
-class BatchOverdraftIT {
+class SameSourcePostingOverdraftIT {
 
     @TestConfiguration
     static class SchemaRegistryProps {
@@ -130,7 +131,7 @@ class BatchOverdraftIT {
     }
 
     @Test
-    void sameSourceBatchCannotOverdraw() {
+    void sameSourceBurstCannotOverdraw() {
         String bootstrap = redpanda.getBootstrapServers().replaceFirst(".*://", "");
         String srUrl = redpanda.getSchemaRegistryAddress();
 
@@ -142,8 +143,8 @@ class BatchOverdraftIT {
         seedBalance(src, "100.00");
 
         int n = 8;
-        // Produce all 8 to ONE partition by keying on the SOURCE account (BANK-15 keying) so the whole
-        // burst lands in one poll batch and is posted in one transaction.
+        // Produce all 8 to ONE partition by keying on the SOURCE account (BANK-15 keying) so the burst is
+        // consumed in offset order; each is posted in its own per-record transaction.
         try (Producer<String, PostingRequested> producer = newProducer(bootstrap, srUrl)) {
             for (int i = 0; i < n; i++) {
                 String transferId = "batch-od-" + i;
