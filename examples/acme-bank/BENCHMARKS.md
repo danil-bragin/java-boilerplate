@@ -676,3 +676,122 @@ be correct as-is.
 Still **one host**, now 14 vCPU / **23.68 GiB** shared across 8 service containers (3 gateway + transfers +
 accounts + antifraud + notifications + nginx) + 5 infra + the host Gatling JVM. The write ceiling is now the
 **single-instance transfers service**; replicating it (like the gateway) is the next lift. See ADR-0030.
+
+## 11. Batching + transfers replication (BANK-21) — money-safe, toward 5k
+
+> **Headline.** Converted the saga consume-side **and the money ledger-posting** to **batch listeners** (a
+> poll of N records → **one** transaction → one commit, instead of N commits/transfer) and **replicated the
+> BANK-20 transfers bottleneck behind an nginx LB**. The **clean full-saga write knee is ~1,500 transfers/s at
+> 0 % error** (p99 ~1.9 s, saga lag bounded), with **~1,200/s the comfortable knee** (p99 427 ms). **5k was NOT
+> reached** — the hard limiter is **total CPU on the 14-core box, shared with the co-located Gatling driver**:
+> at the ~1,700/s cliff the gateway accept tier queues, and adding a 3rd gateway destabilized the host rather
+> than lifting the knee. Money-safety is **fully intact** — the batched ledger posting is **stricter** than
+> per-record (same-source postings serialize in one tx), and the post-bench ledger held **Σ=0, 0 unbalanced
+> transfers, 0 negative real-account balances, 0 duplicate postings**. Beyond ~1.5k the remaining lever is
+> **hop reduction (Phase 2)**, not more replicas.
+
+### 11.1 What changed
+
+- **Consume-side batch listeners (Task 1, transfers):** `ScreeningResultListener` + `PostingResultListener`
+  now receive `List<ConsumerRecord<..>>` and apply the whole poll in **one** `@Transactional` — amortizing
+  the commit/WAL-fsync across the batch. Per-record `inbox.firstTime(..)` dedup stays **inside the loop**, so
+  a redelivered result never double-advances; records arrive in offset order keyed by transferId, so
+  per-transfer ordering and the state-machine guards hold. These hops move **no money** (the transfer status
+  + the next saga event), so there is no money partial-failure risk.
+- **Money ledger-posting batch listener (Task 2, accounts — HIGH-CARE):** `PostingRequestedListener` now
+  processes the poll in **one** transaction; each per-record `pipeline.send(PostTransferCommand)` JOINS that
+  tx (`StronglyConsistent`'s `TransactionTemplate` is `PROPAGATION_REQUIRED`). **Overdraft stays impossible —
+  in fact stricter:** `posting-requested` is keyed by the **source account** (BANK-15) → a source's postings
+  co-partition into one batch/tx; each posting takes the BANK-11 `findByIdForUpdate` source lock (re-entrant
+  within the tx) and reads its derived balance with a JPQL `SELECT SUM(..)`, which Hibernate `FlushMode.AUTO`
+  **flushes the prior in-batch postings' entries before** — so each later posting's SUM **sees the earlier
+  uncommitted siblings** and they serialize. Per-record `inbox` dedup + the per-posting `saveAndFlush` anchor
+  short-circuit a redelivered duplicate (within or across batches).
+- **Rejections are results, only infra errors fail the batch:** INSUFFICIENT_FUNDS / ACCOUNT_NOT_OPERATIONAL /
+  ACCOUNT_ASSET_MISMATCH come back as `PostTransferResult.rejected(..)` (the handler **returns**, never
+  throws) → emit `posting-rejected` and **continue** — a rejection never rolls back its posted siblings. Only
+  a TRUE infra error (DB down) throws; the listener wraps it in `BatchListenerFailedException(record, i)` so
+  the container commits offsets up to `i` and re-drives from `i`, the posting-PK anchor makes the re-drive
+  idempotent, and any rolled-back sibling is also re-driven by the transfers `SagaReconciler` against the
+  ledger. **No money guarantee depends on the batch commit boundary** — overdraft-impossibility is the lock +
+  in-tx SUM; double-post-impossibility is the anchor.
+- **transfers replicated behind an LB (Task 3):** a new `transfers-lb` nginx (static `upstream` + `keepalive`,
+  passes `Authorization` + `Idempotency-Key` verbatim — the BANK-20 connection-reuse lesson re-applied)
+  fronts `--scale transfers=N`; the gateway's `TRANSFERS_BASE_URL` points at it so the RestClient keepalive
+  pool spreads across replicas instead of pinning to one. The **consume-side distributes automatically via the
+  `transfers` consumer group** — verified: the group had members on **3 distinct replica IPs**, lag 0.
+
+### 11.2 The money-safety gate: `BatchOverdraftIT`
+
+A new IT (`accounts/.../BatchOverdraftIT`) is the non-negotiable gate. It produces **8 `posting-requested`
+for the SAME source account** (keyed by the source → one partition → one poll batch → one tx), source funded
+for **exactly 5** of the 8 equal 20.00 debits. It asserts batching does NOT weaken overdraft prevention:
+
+| Assertion | Result |
+|---|---|
+| postings that succeed | **exactly 5** (`ledger-posted`) |
+| postings rejected | **exactly 3** (`posting-rejected` INSUFFICIENT_FUNDS) |
+| source derived balance | **exactly 0.00, never negative** |
+| every posted transfer | **Σ of its ledger entries = 0** |
+| ledger rows written | **exactly 10 entries (5×2), 5 posting rows** |
+| rejected transfers | **0 ledger entries** |
+
+This proves (a) the in-tx serialization makes an 8-deep same-source overdraft impossible, and (b) the 3
+rejections are normal results that **did not roll back** the 5 posted siblings. `BatchOverdraftIT`,
+`ConcurrentDebitIT` (the BANK-11 direct-handler 8-thread overdraft test — the lock path is unchanged for
+non-batched callers), `PostTransferIT`, `PostingFlowIT`, `TransferAdvanceIT` (extended with a batch-of-6 +
+in-batch redelivery dedup), `ScreeningIT`, `NotificationIT`, and gateway `TransferProjectionIT` are all green.
+
+### 11.3 Re-bench: the new write knee (full-saga, open-model, 24 GiB / 14-core VM, gateway=2 / transfers=3)
+
+| Offered (req/s) | KO % | p99 | mean rps | total CPU (of 14 cores) | saga lag | binding |
+|---|---|---|---|---|---|---|
+| **1200** | **0 %** | **427 ms** | **1,178** | **~71 %** (~993/1400) | bounded (transfers ≤2, accounts 0) | comfortable knee |
+| **1500** | **0 %** | **~1.9 s** | **1,447** | **~74 %** (~1040/1400) | bounded (transfers ≤6, accounts 0) | **clean knee — p99 stressed** |
+| 1700 (gw2) | **39.6 %** | 44 s (collapse) | — | ~71 % (not pegged) | 0 (saga drains) | **gateway accept tier queues** |
+| 1700 (gw3) | host destabilized (conn timeouts, Gradle daemon killed) | — | — | host overcommit | 0 | **co-located driver + fleet > 14 cores** |
+
+- **Max clean full-saga write QPS ≈ 1,500/s at 0 % error** (p99 ~1.9 s, saga lag bounded); **~1,200/s is the
+  comfortable knee** (p99 427 ms). The cliff is **~1,700/s** (latency collapse, then KO).
+- **Why this is below BANK-20's "2,200/s".** BANK-20 measured the **gateway accept knee only** (the POST
+  returns 202 once the transfer is *requested*; the saga settles async). This BANK-21 sweep is the **same
+  open-model write**, but the box is now also running the full batched saga to completion under load and the
+  driver is co-located; the honest **end-to-end sustainable** rate at 0 % error is ~1.5k. The batching win is
+  real (accounts CPU **~4–10 %**, saga lag **bounded/0** even at the knee — the ledger posting is now nearly
+  free), but it does not move the **gateway accept tier**, which is the limiter at the cliff.
+- **The hard limiter is total CPU at 14 cores, shared with the co-located Gatling driver.** At the cliff the
+  two gateways sat ~175 % **each** (~3.5 cores on the accept/JWT/proxy hop) and Postgres ~140 %; total ~1040 %
+  of 1400 with the driver also resident. Scaling gateway 2→3 did **not** lift the knee — it pushed the
+  co-located host into instability (Gatling's own connections timed out, the Gradle daemon was killed). On a
+  **dedicated** cluster the gateway tier would scale further, but on this one box 14 cores is the wall.
+
+### 11.4 The arithmetic of 5k (honest)
+
+At a measured **~5 millicore/transfer** end-to-end (gateway JWT/proxy + transfers POST + the saga relay +
+the batched posting), **5,000 transfers/s ≈ 25 cores** of work — **almost 2× the 14-core box**, before the
+co-located load generator. **Batching cut the per-transfer commit/poll overhead** (one commit per poll vs one
+per record; accounts posting CPU fell to single digits and saga lag stays bounded), and **replicas scale the
+accept tier to the CPU wall**, but **no amount of replication beats the total-CPU ceiling**. **5k is not
+reachable on 14 cores.** Reaching it needs **hop reduction (Phase 2)** — cutting the **per-transfer CPU**
+itself: a synchronous fast-path or merging saga hops (e.g. fold screening into the request, or post
+inline for the common case) to spend fewer cores per transfer, not more boxes. That is the lever beyond
+~1.5k here, and the honest path to 5k is **fewer cores/transfer**, then a bigger/dedicated cluster.
+
+### 11.5 Money-safety — intact (no guarantee weakened)
+
+- **Overdraft impossible, verified two ways:** `BatchOverdraftIT` (8-deep same-source batch in one tx → 5
+  post / 3 reject / balance 0, never negative) **and** the post-bench ledger after hundreds of thousands of
+  loaded transfers: **global Σ = 0, 0 unbalanced transfers, 0 negative real-account balances, 0 duplicate
+  postings**. `ConcurrentDebitIT` (direct-handler 8-thread overdraft) stays green.
+- **The batched money path is STRICTER than per-record** (each later same-source posting's SUM sees the
+  earlier uncommitted in-batch entries), not weaker. `synchronous_commit=on` for the money DBs, `acks=all` +
+  idempotent producer, per-record inbox dedup, the per-posting `saveAndFlush` anchor, and the BANK-11 source
+  lock are all **unchanged**. **No sharding.**
+- A rejection emits `posting-rejected` as a normal result and **never** rolls back its posted siblings; only
+  a true infra error fails the batch (commit-up-to-i + idempotent re-drive via anchor + reconciler).
+
+### 11.6 Co-located caveat
+
+One host, **14 vCPU / 23.68 GiB**, now running **gateway×2 + transfers×3 + 2 nginx LBs + accounts + antifraud
++ notifications + 5 infra + the host Gatling JVM**. The knee is the **total-CPU wall**, not any single tier.
+See ADR-0031.
