@@ -94,7 +94,7 @@ public class TransferWriteSimulation extends Simulation {
                         dst = destinations.get((n + 1) % destinations.size());
                     }
                     String body = "{\"sourceAccountId\":\"" + src + "\",\"destinationAccountId\":\"" + dst
-                            + "\",\"amount\":{\"value\":\"1.00\",\"asset\":\"USD\"}}";
+                            + "\",\"amount\":{\"value\":\"" + BenchEnv.transferAmount() + "\",\"asset\":\"USD\"}}";
                     return session.set("body", body)
                             .set("token", tokens.next())
                             .set("idem", UUID.randomUUID().toString());

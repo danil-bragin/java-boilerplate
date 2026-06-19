@@ -109,6 +109,15 @@ public final class BenchEnv {
         return intProp("BENCH_TOKEN_COUNT", 8);
     }
 
+    /**
+     * Transfer amount (USD) for the write-path sims. Default {@code "1.00"} is fast-path-ELIGIBLE
+     * (≤ the 1000 threshold) so it exercises the BANK-22 synchronous fast-path. Set above the threshold
+     * (e.g. {@code -DBENCH_TRANSFER_AMOUNT=5000.00}) to drive the INELIGIBLE async slow-path.
+     */
+    public static String transferAmount() {
+        return prop("BENCH_TRANSFER_AMOUNT", "1.00").trim();
+    }
+
     static String prop(String key, String def) {
         String v = System.getProperty(key);
         if (v == null || v.isBlank()) {
