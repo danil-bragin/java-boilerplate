@@ -19,6 +19,14 @@ dependencies {
     compileOnly(libs.bucket4j.lettuce)
     compileOnly(libs.lettuce.core)
     compileOnly(libs.spring.boot.starter.data.redis)
+    // Redis-outage fail policy: the sync resolver throws on Redis failure and a servlet guard turns
+    // fail-closed into a clean 503. Both are servlet-only concerns the consumer already has at runtime
+    // via spring-boot-starter-web (the giffing servlet filter needs them too), so compileOnly here.
+    compileOnly(libs.spring.web)
+    compileOnly("jakarta.servlet:jakarta.servlet-api")
+    // Redis-outage visibility metric (acme.ratelimit.redis.errors). Runtime dependency so the
+    // autoconfig loads; the metric itself is gated on a MeterRegistry bean being present.
+    implementation(libs.micrometer.core)
 
     annotationProcessor(libs.spring.boot.configuration.processor)
     annotationProcessor(libs.spring.boot.autoconfigure.processor)
