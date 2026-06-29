@@ -1,6 +1,8 @@
 package com.acme.httpclient;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
@@ -48,9 +50,19 @@ public class HttpClientProperties {
     public static class TokenRelay {
         /**
          * When {@code true} (and the resource-server JWT types are on the classpath) the current
-         * request's {@code Authorization: Bearer ...} is copied onto every outbound call.
+         * request's {@code Authorization: Bearer ...} is copied onto outbound calls — but only to hosts
+         * named in {@link #allowedHosts}. A bearer token is the caller's identity; relay is opt-in and
+         * host-scoped so it is never leaked to a third-party host.
          */
         private boolean enabled = false;
+
+        /**
+         * Hosts the caller's bearer token may be relayed to — the trusted <em>internal</em> services.
+         * Matched by exact host name or a leading {@code *.} wildcard (e.g. {@code *.svc.cluster.local}).
+         * <strong>Fail-safe:</strong> empty (the default) relays to nothing even when {@link #enabled} is
+         * {@code true}. Never add public/third-party hosts here.
+         */
+        private List<String> allowedHosts = new ArrayList<>();
 
         public boolean isEnabled() {
             return enabled;
@@ -58,6 +70,14 @@ public class HttpClientProperties {
 
         public void setEnabled(boolean enabled) {
             this.enabled = enabled;
+        }
+
+        public List<String> getAllowedHosts() {
+            return allowedHosts;
+        }
+
+        public void setAllowedHosts(List<String> allowedHosts) {
+            this.allowedHosts = allowedHosts;
         }
     }
 

@@ -82,8 +82,8 @@ public class HttpClientAutoConfiguration {
 
         @Bean
         @ConditionalOnMissingBean
-        BearerTokenRelayInterceptor bearerTokenRelayInterceptor() {
-            return new BearerTokenRelayInterceptor();
+        BearerTokenRelayInterceptor bearerTokenRelayInterceptor(HttpClientProperties properties) {
+            return new BearerTokenRelayInterceptor(properties.getTokenRelay().getAllowedHosts());
         }
 
         @Bean
