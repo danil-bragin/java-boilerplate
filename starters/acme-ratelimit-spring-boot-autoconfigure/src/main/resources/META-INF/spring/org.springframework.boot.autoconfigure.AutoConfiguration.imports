@@ -1,1 +1,3 @@
 com.acme.ratelimit.autoconfigure.RateLimitAutoConfiguration
+com.acme.ratelimit.autoconfigure.RedisRateLimitAutoConfiguration
+com.acme.ratelimit.autoconfigure.RedisRateLimitMissingDependencyAutoConfiguration

@@ -13,6 +13,13 @@ dependencies {
     api(libs.caffeine)
     api(libs.caffeine.jcache)
 
+    // Optional Redis (distributed) backend. compileOnly so default `local` users never pull Redis:
+    // Bucket4j's Lettuce ProxyManager + the raw Lettuce client. Activated only when
+    // acme.ratelimit.backend=redis AND these are on the consumer classpath (see RedisRateLimit...).
+    compileOnly(libs.bucket4j.lettuce)
+    compileOnly(libs.lettuce.core)
+    compileOnly(libs.spring.boot.starter.data.redis)
+
     annotationProcessor(libs.spring.boot.configuration.processor)
     annotationProcessor(libs.spring.boot.autoconfigure.processor)
 
@@ -20,4 +27,9 @@ dependencies {
     testImplementation(libs.spring.boot.starter.web)
     // Bucket4JBootProperties carries jakarta-validation constraints; binding them needs a provider.
     testImplementation(libs.spring.boot.starter.validation)
+    // Redis distributed-backend IT: real Redis via Testcontainers (acme-test-support) + the
+    // Lettuce ProxyManager classes under test.
+    testImplementation(project(":starters:acme-test-support"))
+    testImplementation(libs.bucket4j.lettuce)
+    testImplementation(libs.lettuce.core)
 }

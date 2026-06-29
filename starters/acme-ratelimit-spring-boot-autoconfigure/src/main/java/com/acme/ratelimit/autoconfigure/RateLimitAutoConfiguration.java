@@ -15,6 +15,7 @@ import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.context.annotation.Bean;
 import org.springframework.core.env.Environment;
@@ -31,18 +32,21 @@ import org.springframework.core.env.Environment;
  * auto-configuration fixes.
  *
  * <p>The backend is a Caffeine-backed JSR-107 provider. Buckets are therefore <strong>per
- * replica</strong>: each instance keeps its own counters. This is sufficient for the
- * boilerplate's rate-limit story; for buckets SHARED across horizontally-scaled replicas wire a
- * distributed backend (e.g. Bucket4j's Redis/lettuce proxy-manager, which Bucket4j activates for
- * the reactive WEBFLUX/GATEWAY filter methods) and this default steps aside via
- * {@link ConditionalOnMissingBean}.
+ * replica</strong>: each instance keeps its own counters, so a per-caller limit multiplies with the
+ * replica count. This is the {@code local} (default) backend. For buckets SHARED across
+ * horizontally-scaled replicas — a cluster-wide limit — set {@code acme.ratelimit.backend=redis};
+ * {@link RedisRateLimitAutoConfiguration} then provides a distributed Redis ProxyManager and this
+ * default steps aside (its {@code backend=local} condition no longer matches).
  *
- * <p>Runs only when rate-limiting is enabled. Guarded with {@link ConditionalOnMissingBean} so a
- * consumer-defined {@link javax.cache.CacheManager} wins.
+ * <p>Runs only when rate-limiting is enabled and {@code acme.ratelimit.backend} is {@code local} or
+ * unset. Guarded with {@link ConditionalOnMissingBean} so a consumer-defined
+ * {@link javax.cache.CacheManager} wins.
  */
 @AutoConfiguration(before = Bucket4jCacheConfiguration.class)
 @ConditionalOnClass({Caching.class, CaffeineCachingProvider.class})
 @ConditionalOnProperty(prefix = "bucket4j", name = "enabled", havingValue = "true")
+@ConditionalOnProperty(prefix = "acme.ratelimit", name = "backend", havingValue = "local", matchIfMissing = true)
+@EnableConfigurationProperties(RateLimitProperties.class)
 public class RateLimitAutoConfiguration {
 
     /**

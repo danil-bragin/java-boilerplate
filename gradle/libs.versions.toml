@@ -2,6 +2,9 @@
 java = "21"
 spring-boot = "3.5.6"
 bucket4j = "0.13.0"
+# Core/distributed Bucket4j modules shipped by the giffing starter 0.13.0 (jdk17 variant).
+# Reused for the optional Redis (Lettuce) distributed ProxyManager backend.
+bucket4j-core = "8.14.0"
 jqwik = "1.9.2"
 shedlock = "6.9.2"
 pipelinr = "0.11"
@@ -75,6 +78,11 @@ jmolecules-archunit = { module = "org.jmolecules.integrations:jmolecules-archuni
 archunit-junit5 = { module = "com.tngtech.archunit:archunit-junit5", version.ref = "archunit" }
 awaitility = { module = "org.awaitility:awaitility" }
 bucket4j-spring-boot-starter = { module = "com.giffing.bucket4j.spring.boot.starter:bucket4j-spring-boot-starter", version.ref = "bucket4j" }
+# Bucket4j's Lettuce-backed distributed ProxyManager (bucket4j-redis). Optional: only the Redis
+# rate-limit backend needs it; the giffing starter ships it as `provided`, so wire it explicitly.
+bucket4j-lettuce = { module = "com.bucket4j:bucket4j_jdk17-lettuce", version.ref = "bucket4j-core" }
+# Raw Lettuce client (RedisClient / StatefulRedisConnection). Version managed by the Spring Boot BOM.
+lettuce-core = { module = "io.lettuce:lettuce-core" }
 springdoc-openapi-starter-webmvc-ui = { module = "org.springdoc:springdoc-openapi-starter-webmvc-ui", version.ref = "springdoc" }
 swagger-annotations = { module = "io.swagger.core.v3:swagger-annotations", version.ref = "swagger-annotations" }
 jackson-databind-nullable = { module = "org.openapitools:jackson-databind-nullable", version.ref = "jackson-databind-nullable" }

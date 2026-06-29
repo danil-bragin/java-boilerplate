@@ -74,7 +74,7 @@ Each starter follows the standard Spring Boot pattern: an `*-autoconfigure` modu
 
 | Starter | Purpose |
 |---|---|
-| `acme-web` | RFC 9457 Problem+JSON error handler (`@RestControllerAdvice`), unified validation error shape, i18n via `MessageSource`, idempotency-key filter (Redis `SET NX`), rate limiting (Bucket4j), CORS + security headers, springdoc/OpenAPI |
+| `acme-web` | RFC 9457 Problem+JSON error handler (`@RestControllerAdvice`), unified validation error shape, i18n via `MessageSource`, idempotency-key filter (Redis `SET NX`), rate limiting (Bucket4j — see `acme-ratelimit`), CORS + security headers, springdoc/OpenAPI |
 | `acme-persistence` | Spring Data JPA / Hibernate base config, HikariCP, `@EnableJpaAuditing` with `Clock`-backed `DateTimeProvider`, Flyway with vendor-specific migration dirs (`db/migration/{oracle,postgresql}`), `GenerationType.SEQUENCE` for Oracle-first portability |
 | `acme-observability` | Micrometer + OTel bridge → OTLP exporter, Prometheus endpoint, native structured logging (ECS), MDC request-id filter, Actuator liveness/readiness probes, ShedLock JDBC (`usingDbTime()`), `Clock.systemUTC()` bean, graceful shutdown |
 | `acme-cqrs` | PipelinR command/query bus; ships `ValidationMiddleware` (`@Order` 10) + `TransactionMiddleware` (`@Order` 20, where the `StronglyConsistent` marker gates `TransactionTemplate` wrapping); logging/metrics middleware are consumer-supplied; jMolecules vocabulary |
@@ -84,6 +84,7 @@ Each starter follows the standard Spring Boot pattern: an `*-autoconfigure` modu
 | `acme-cache` | Caffeine L1 cache via Spring `@Cacheable` abstraction |
 | `acme-resilience` | Resilience4j presets (Retry, CircuitBreaker, TimeLimiter, Bulkhead) + Micrometer metrics |
 | `acme-featureflags` | OpenFeature Java SDK; `NoOpProvider` default via `@ConditionalOnMissingBean` (drop in flagd or another provider to override) |
+| `acme-ratelimit` | Makes Bucket4j servlet rate-limiting boot out of the box. `acme.ratelimit.backend=local` (default) uses an in-process Caffeine JSR-107 store — **per-replica** counters; `acme.ratelimit.backend=redis` switches to a distributed Bucket4j `LettuceBasedProxyManager` over Redis for a **cluster-wide** limit (opt-in, classpath-gated). See ADR-0034 |
 | `acme-httpclient` | Declarative `@HttpExchange` interface clients via `HttpServiceProxyFactory` + `HttpClients` factory over a shared, observation-wired `RestClient.Builder`; sane timeouts; optional OAuth2 bearer token relay (`@ConditionalOnProperty`) and a Resilience4j `CircuitBreaker`+`Retry` decorator reusing `acme-resilience` presets |
 | `acme-test-support` | Shared Testcontainers config — Redpanda via `@ServiceConnection`, Postgres + Redis via `DynamicPropertyRegistrar`; base integration test classes |
 
