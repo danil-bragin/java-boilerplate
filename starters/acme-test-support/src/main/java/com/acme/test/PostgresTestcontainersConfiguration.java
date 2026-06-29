@@ -1,5 +1,6 @@
 package com.acme.test;
 
+import java.time.Duration;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.test.context.DynamicPropertyRegistrar;
@@ -15,7 +16,9 @@ public class PostgresTestcontainersConfiguration {
 
     @Bean
     PostgreSQLContainer<?> postgresContainer() {
-        return new PostgreSQLContainer<>("postgres:16-alpine");
+        // Headroom for slow, busy CI runners that start the container many times across a suite (parity with
+        // the Redpanda config); fast local machines are unaffected.
+        return new PostgreSQLContainer<>("postgres:16-alpine").withStartupTimeout(Duration.ofMinutes(2));
     }
 
     @Bean
