@@ -76,14 +76,14 @@ Each starter follows the standard Spring Boot pattern: an `*-autoconfigure` modu
 | `acme-web` | RFC 9457 Problem+JSON error handler (`@RestControllerAdvice`), unified validation error shape, i18n via `MessageSource`, idempotency-key filter (Redis `SET NX`), rate limiting (Bucket4j), CORS + security headers, springdoc/OpenAPI |
 | `acme-persistence` | Spring Data JPA / Hibernate base config, HikariCP, `@EnableJpaAuditing` with `Clock`-backed `DateTimeProvider`, Flyway with vendor-specific migration dirs (`db/migration/{oracle,postgresql}`), `GenerationType.SEQUENCE` for Oracle-first portability |
 | `acme-observability` | Micrometer + OTel bridge → OTLP exporter, Prometheus endpoint, native structured logging (ECS), MDC request-id filter, Actuator liveness/readiness probes, ShedLock JDBC (`usingDbTime()`), `Clock.systemUTC()` bean, graceful shutdown |
-| `acme-cqrs` | PipelinR command/query bus with explicit middleware pipeline: Logging → Metrics → Validation → Transaction; `StronglyConsistent` marker gates `TransactionTemplate` wrapping; jMolecules vocabulary |
+| `acme-cqrs` | PipelinR command/query bus; ships `ValidationMiddleware` (`@Order` 10) + `TransactionMiddleware` (`@Order` 20, where the `StronglyConsistent` marker gates `TransactionTemplate` wrapping); logging/metrics middleware are consumer-supplied; jMolecules vocabulary |
 | `acme-outbox` | Spring Modulith event publication registry + Kafka externalization (`@Externalized`); at-least-once delivery; Flyway owns the `event_publication` table (Oracle 19c compatible) |
 | `acme-messaging` | Spring Kafka consumer base config (Avro/SR-ready deserializer wrapper), JDBC inbox dedup (`processed_messages` unique constraint in the same transaction), DLT error handler |
 | `acme-security` | OAuth2 JWT resource server, Keycloak `realm_access.roles` → `ROLE_*` converter, `@EnableMethodSecurity` + `@PreAuthorize` RBAC, Hibernate Envers audit, `AuditorAware` |
 | `acme-cache` | Caffeine L1 cache via Spring `@Cacheable` abstraction |
 | `acme-resilience` | Resilience4j presets (Retry, CircuitBreaker, TimeLimiter, Bulkhead) + Micrometer metrics |
-| `acme-featureflags` | OpenFeature Java SDK + flagd provider; in-memory provider default (`@ConditionalOnMissingBean`) |
-| `acme-test-support` | Shared Testcontainers `@ServiceConnection` config for Postgres and Redpanda; base integration test classes |
+| `acme-featureflags` | OpenFeature Java SDK; `NoOpProvider` default via `@ConditionalOnMissingBean` (drop in flagd or another provider to override) |
+| `acme-test-support` | Shared Testcontainers config — Redpanda via `@ServiceConnection`, Postgres + Redis via `DynamicPropertyRegistrar`; base integration test classes |
 
 ---
 
