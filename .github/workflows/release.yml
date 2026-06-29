@@ -18,7 +18,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
       - name: Publish (version from the tag)
         env:
           # GITHUB_TOKEN with packages:write authorizes the GitHub Packages Maven repo — no PAT needed.

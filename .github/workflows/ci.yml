@@ -20,7 +20,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
       - name: Compile + format check
         run: ./gradlew compileJava compileTestJava spotlessCheck --stacktrace
 
@@ -33,7 +33,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
       - name: Build
         # The default build excludes the @Tag("e2e") full-stack tests (heavy image pulls); only the
         # e2e module's compileTestJava runs here, proving the e2e wiring stays sound on every PR.
@@ -71,7 +71,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
       - name: Generate CycloneDX SBOM
         run: ./gradlew cyclonedxBom --stacktrace
       - name: Upload SBOM
@@ -110,7 +110,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
       - name: Build the service boot jars
         # ComposeContainer.withBuild(true) builds the service images from these jars.
         run: ./gradlew bankJars --stacktrace
