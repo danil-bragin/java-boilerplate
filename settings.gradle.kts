@@ -47,6 +47,8 @@ include(
     "starters:acme-avro-spring-boot-starter",
     "starters:acme-ratelimit-spring-boot-autoconfigure",
     "starters:acme-ratelimit-spring-boot-starter",
+    "starters:acme-httpclient-spring-boot-autoconfigure",
+    "starters:acme-httpclient-spring-boot-starter",
     "examples:demo-service",
     "examples:acme-bank:bank-contracts",
     "examples:acme-bank:accounts",

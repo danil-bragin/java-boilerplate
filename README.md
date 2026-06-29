@@ -56,6 +56,7 @@ acme-boilerplate/                    Gradle monorepo (Kotlin DSL)
 │   ├── acme-cache-spring-boot-{autoconfigure,starter}
 │   ├── acme-resilience-spring-boot-starter
 │   ├── acme-featureflags-spring-boot-{autoconfigure,starter}
+│   ├── acme-httpclient-spring-boot-{autoconfigure,starter}
 │   └── acme-test-support            Testcontainers @ServiceConnection config + base ITs
 ├── examples/
 │   └── demo-service/                deletable demo wiring all starters; 26 integration tests
@@ -83,6 +84,7 @@ Each starter follows the standard Spring Boot pattern: an `*-autoconfigure` modu
 | `acme-cache` | Caffeine L1 cache via Spring `@Cacheable` abstraction |
 | `acme-resilience` | Resilience4j presets (Retry, CircuitBreaker, TimeLimiter, Bulkhead) + Micrometer metrics |
 | `acme-featureflags` | OpenFeature Java SDK; `NoOpProvider` default via `@ConditionalOnMissingBean` (drop in flagd or another provider to override) |
+| `acme-httpclient` | Declarative `@HttpExchange` interface clients via `HttpServiceProxyFactory` + `HttpClients` factory over a shared, observation-wired `RestClient.Builder`; sane timeouts; optional OAuth2 bearer token relay (`@ConditionalOnProperty`) and a Resilience4j `CircuitBreaker`+`Retry` decorator reusing `acme-resilience` presets |
 | `acme-test-support` | Shared Testcontainers config — Redpanda via `@ServiceConnection`, Postgres + Redis via `DynamicPropertyRegistrar`; base integration test classes |
 
 ---
