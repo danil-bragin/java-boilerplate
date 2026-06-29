@@ -1,7 +1,7 @@
 [versions]
 java = "21"
 spring-boot = "3.5.6"
-bucket4j = "0.13.0"
+bucket4j = "0.14.0"
 # Core/distributed Bucket4j modules shipped by the giffing starter 0.13.0 (jdk17 variant).
 # Reused for the optional Redis (Lettuce) distributed ProxyManager backend.
 bucket4j-core = "8.14.0"
