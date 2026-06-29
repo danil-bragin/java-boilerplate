@@ -100,6 +100,31 @@ Each starter follows the standard Spring Boot pattern: an `*-autoconfigure` modu
 
 ---
 
+## Consuming the starters
+
+The `acme-*` starters are published to **GitHub Packages** on every `v*` tag (group `com.acme`, version = the tag). To depend on one without forking:
+
+```kotlin
+repositories {
+    mavenCentral()
+    maven {
+        url = uri("https://maven.pkg.github.com/danil-bragin/java-boilerplate")
+        credentials {
+            username = providers.gradleProperty("gpr.user").orNull ?: System.getenv("GITHUB_ACTOR")
+            password = providers.gradleProperty("gpr.key").orNull ?: System.getenv("GITHUB_TOKEN")
+        }
+    }
+}
+
+dependencies {
+    implementation("com.acme:acme-httpclient-spring-boot-starter:0.1.0")
+}
+```
+
+> GitHub Packages requires authentication even for public packages — supply a token with `read:packages`. To try a starter locally without the remote, run `./gradlew :starters:<name>:publishToMavenLocal` and resolve from `mavenLocal()`.
+
+---
+
 ## Local stack
 
 `docker compose up -d` (using `compose.yaml` at the repo root) starts all backing infrastructure:

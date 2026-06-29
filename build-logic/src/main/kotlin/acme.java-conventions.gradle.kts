@@ -1,6 +1,7 @@
 plugins {
     `java-library`
     jacoco
+    `maven-publish`
     id("com.diffplug.spotless")
 }
 
@@ -41,5 +42,37 @@ spotless {
         removeUnusedImports()
         trimTrailingWhitespace()
         endWithNewline()
+    }
+}
+
+// Publishing — only the reusable `:starters:*` modules are published (consumable as dependencies);
+// the `:examples:*` apps are not. Targets GitHub Packages; credentials come from the CI GITHUB_TOKEN
+// (or local `gpr.user`/`gpr.key` gradle properties). Source + javadoc jars are attached so consumers
+// get IDE support. A `mavenLocal` install also works for trying a starter without a remote push.
+if (path.startsWith(":starters:")) {
+    group = "com.acme"
+    version = (findProperty("acmeVersion") as String?) ?: "0.1.0"
+
+    java {
+        withSourcesJar()
+        withJavadocJar()
+    }
+
+    publishing {
+        publications {
+            create<MavenPublication>("maven") {
+                from(components["java"])
+            }
+        }
+        repositories {
+            maven {
+                name = "GitHubPackages"
+                url = uri("https://maven.pkg.github.com/danil-bragin/java-boilerplate")
+                credentials {
+                    username = System.getenv("GITHUB_ACTOR") ?: (findProperty("gpr.user") as String?)
+                    password = System.getenv("GITHUB_TOKEN") ?: (findProperty("gpr.key") as String?)
+                }
+            }
+        }
     }
 }
