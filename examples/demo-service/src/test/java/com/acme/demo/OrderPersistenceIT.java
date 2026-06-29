@@ -1,8 +1,10 @@
 package com.acme.demo;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
 
 import com.acme.test.PostgresTestcontainersConfiguration;
+import java.time.temporal.ChronoUnit;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -27,7 +29,11 @@ class OrderPersistenceIT {
         Order found = orders.findById(saved.getId()).orElseThrow();
         assertThat(found.getSku()).isEqualTo("SKU-1");
         assertThat(found.getQuantity()).isEqualTo(3);
-        assertThat(found.getCreatedAt()).isEqualTo(saved.getCreatedAt());
+        // createdAt round-trips, modulo the column's microsecond precision: the in-memory Instant carries
+        // nanosecond resolution (Linux clocks especially) but Postgres timestamp(6) stores microseconds (and
+        // may round, depending on the driver), so allow ±1µs instead of asserting exact equality across the
+        // lossy DB boundary.
+        assertThat(found.getCreatedAt()).isCloseTo(saved.getCreatedAt(), within(1, ChronoUnit.MICROS));
     }
 
     @Test
