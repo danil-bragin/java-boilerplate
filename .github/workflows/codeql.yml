@@ -32,7 +32,7 @@ jobs:
           # 'security-and-quality' is broader than the default 'security-extended'.
           queries: security-and-quality
 
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
 
       - name: Build (no tests — CodeQL only needs compilation)
         # Compile every module so CodeQL sees all bytecode; skip the heavy Testcontainers suite.
