@@ -17,7 +17,7 @@ jmolecules = "2025.0.2"
 archunit = "1.4.2"
 openapi-generator = "7.9.0"
 gatling = "3.13.5.4"
-springdoc = "2.8.9"
+springdoc = "3.0.3"
 swagger-annotations = "2.2.22"
 jackson-databind-nullable = "0.2.6"
 
