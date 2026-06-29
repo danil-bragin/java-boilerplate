@@ -9,5 +9,5 @@ repositories {
 
 dependencies {
     // Spotless plugin made available to precompiled convention scripts.
-    implementation("com.diffplug.spotless:spotless-plugin-gradle:7.0.2")
+    implementation("com.diffplug.spotless:spotless-plugin-gradle:8.7.0")
 }
