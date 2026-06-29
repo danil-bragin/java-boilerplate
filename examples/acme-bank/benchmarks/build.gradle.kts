@@ -19,7 +19,7 @@ plugins {
 
 dependencies {
     // Setup helpers (token fetch, account open/fund) use Jackson + java.net.http (JDK built-in).
-    gatlingImplementation("com.fasterxml.jackson.core:jackson-databind:2.18.2")
+    gatlingImplementation("com.fasterxml.jackson.core:jackson-databind:2.22.0")
 
     // acme.java-conventions adds an unversioned junit-platform-launcher to testRuntimeOnly; this
     // non-Spring module has no test source, but the platform supplies the managed version so the
