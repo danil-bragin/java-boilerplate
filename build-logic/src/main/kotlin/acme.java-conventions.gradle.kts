@@ -1,5 +1,6 @@
 plugins {
     `java-library`
+    jacoco
     id("com.diffplug.spotless")
 }
 
@@ -15,6 +16,18 @@ tasks.withType<JavaCompile>().configureEach {
 
 tasks.withType<Test>().configureEach {
     useJUnitPlatform()
+}
+
+// Coverage: every module emits an XML report (consumed by the CI coverage summary/badge) after its tests.
+tasks.named<JacocoReport>("jacocoTestReport") {
+    reports {
+        xml.required = true
+        html.required = true
+        csv.required = true
+    }
+}
+tasks.named<Test>("test") {
+    finalizedBy(tasks.named("jacocoTestReport"))
 }
 
 dependencies {
