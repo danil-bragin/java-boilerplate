@@ -83,7 +83,7 @@ jobs:
             build/reports/bom.xml
           if-no-files-found: warn
       - name: Trivy filesystem scan (dependencies + config)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@0.35.0
         with:
           scan-type: fs
           scan-ref: .
