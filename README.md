@@ -147,7 +147,7 @@ The demo service ships 26 integration tests covering every starter's key behavio
 
 ## Architectural Decision Records
 
-ADRs live in [`docs/decisions/`](docs/decisions/) in [MADR](https://adr.github.io/madr/) format (0000–0008):
+ADRs live in [`docs/decisions/`](docs/decisions/) in [MADR](https://adr.github.io/madr/) format. **0000–0008** cover the boilerplate/starters; **0009–0032** cover the `acme-bank` example (saga choreography, money-safety, and the throughput work).
 
 | ADR | Topic |
 |---|---|
@@ -160,5 +160,12 @@ ADRs live in [`docs/decisions/`](docs/decisions/) in [MADR](https://adr.github.i
 | 0006 | Security: OAuth2 + Keycloak |
 | 0007 | Utility starters (cache, resilience, feature flags) |
 | 0008 | Inbox: effectively-once |
+| 0009–0032 | `acme-bank`: double-entry ledger, idempotency, reconciliation, gateway/scaling, synchronous fast-path (see [`docs/decisions/`](docs/decisions/)) |
 
 Full design rationale: [`docs/superpowers/specs/2026-06-17-acme-boilerplate-design.md`](docs/superpowers/specs/2026-06-17-acme-boilerplate-design.md)
+
+---
+
+## License
+
+Released under the [MIT License](LICENSE).
