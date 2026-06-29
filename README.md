@@ -1,5 +1,11 @@
 # acme-boilerplate
 
+[![CI](https://github.com/danil-bragin/java-boilerplate/actions/workflows/ci.yml/badge.svg)](https://github.com/danil-bragin/java-boilerplate/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/danil-bragin/java-boilerplate/actions/workflows/codeql.yml/badge.svg)](https://github.com/danil-bragin/java-boilerplate/actions/workflows/codeql.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Java 21](https://img.shields.io/badge/Java-21-blue.svg)](https://openjdk.org/projects/jdk/21/)
+[![Spring Boot 3.5](https://img.shields.io/badge/Spring%20Boot-3.5-brightgreen.svg)](https://spring.io/projects/spring-boot)
+
 A production-grade, opinionated Spring Boot 3.5 / Java 21 microservice boilerplate. It ships as a set of reusable `acme-*-spring-boot-starter` modules that bring cross-cutting concerns (REST problem details, persistence, observability, CQRS, outbox/inbox, security, caching, resilience, feature flags) onto the classpath via Spring Boot auto-configuration. A deletable `examples/demo-service` wires all starters together and proves each with integration tests. Oracle is the primary/reference database; Postgres is a supported swap — the reusable layer stays DB-agnostic throughout.
 
 ---

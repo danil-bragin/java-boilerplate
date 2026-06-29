@@ -1,0 +1,37 @@
+name: Bug report
+description: Report a defect in a starter or the acme-bank example
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: A clear description of the bug and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: Steps, a failing test, or a minimal snippet. Include the module (e.g. acme-persistence, examples/acme-bank/transfers).
+    validations:
+      required: true
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: JDK version, OS, Docker version (for Testcontainers), and the commit/tag.
+      value: |
+        - JDK:
+        - OS:
+        - Docker:
+        - Commit/tag:
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / stack trace
+      render: shell
+    validations:
+      required: false

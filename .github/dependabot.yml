@@ -1,0 +1,33 @@
+version: 2
+updates:
+  # Gradle dependencies (version catalog + build scripts across all modules).
+  - package-ecosystem: gradle
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      # Batch the Spring ecosystem so related bumps land together and CI runs once.
+      spring:
+        patterns:
+          - "org.springframework*"
+          - "org.springframework.boot*"
+          - "org.springframework.modulith*"
+      testing:
+        patterns:
+          - "org.junit*"
+          - "org.testcontainers*"
+          - "org.assertj*"
+          - "org.mockito*"
+          - "org.awaitility*"
+    labels:
+      - dependencies
+
+  # Keep the GitHub Actions used in workflows current.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    labels:
+      - dependencies
+      - ci
